@@ -6,7 +6,10 @@
 //! contains `/login`, that navigation is blocked and its URL fragment, which
 //! holds the fork selector and key, is printed on stdout.
 //!
-//!   cosmic-authenticator-login URL TITLE USER_AGENT
+//!   cosmic-authenticator-login URL TITLE USER_AGENT [SCHEME BACKGROUND TEXT]
+//!
+//! SCHEME is `dark` or `light` and the colours are `#rrggbb`: the main app's
+//! COSMIC theme, which GTK cannot read from inside the Flatpak.
 //!
 //! Exit status 0 with the fragment on stdout; 1 if the window was closed first.
 
@@ -27,22 +30,58 @@ fn callback_fragment(uri: &str) -> Option<String> {
     (parsed.path().contains("/login") && has_selector).then_some(fragment)
 }
 
+/// A `#rrggbb` colour, the only form put into the style sheet.
+fn is_hex_colour(value: &str) -> bool {
+    value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Colours the title bar like the main app, since GTK's default one is light
+/// even on a dark desktop.
+fn apply_theme(dark: bool, background: &str, text: &str) {
+    if let Some(settings) = gtk::Settings::default() {
+        settings.set_gtk_application_prefer_dark_theme(dark);
+    }
+    let Some(display) = gtk::gdk::Display::default() else { return };
+    if !(is_hex_colour(background) && is_hex_colour(text)) {
+        return;
+    }
+    let provider = gtk::CssProvider::new();
+    provider.load_from_data(&format!(
+        "window, headerbar {{ background: {background}; color: {text}; }}\n\
+         headerbar {{ box-shadow: none; border-bottom: 1px solid alpha({text}, 0.1); }}"
+    ));
+    gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+}
+
 fn main() -> glib::ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    let [_, url, title, user_agent] = args.as_slice() else {
-        eprintln!("usage: cosmic-authenticator-login URL TITLE USER_AGENT");
-        return glib::ExitCode::FAILURE;
+    let (url, title, user_agent, theme) = match args.as_slice() {
+        [_, url, title, user_agent] => (url.clone(), title.clone(), user_agent.clone(), None),
+        [_, url, title, user_agent, scheme, background, text] => (
+            url.clone(),
+            title.clone(),
+            user_agent.clone(),
+            Some((scheme == "dark", background.clone(), text.clone())),
+        ),
+        _ => {
+            eprintln!("usage: cosmic-authenticator-login URL TITLE USER_AGENT [SCHEME BACKGROUND TEXT]");
+            return glib::ExitCode::FAILURE;
+        }
     };
-    let (url, title, user_agent) = (url.clone(), title.clone(), user_agent.clone());
 
+    // The main app's id, so the dock shows this window with the app's icon.
+    // NON_UNIQUE keeps it from claiming the app's D-Bus name.
     let app = gtk::Application::builder()
-        .application_id("dev.nilltadios.CosmicAuthenticator.Login")
+        .application_id("dev.nilltadios.CosmicAuthenticator")
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
     let signed_in = Rc::new(Cell::new(false));
 
     let signed_in_activate = signed_in.clone();
     app.connect_activate(move |app| {
+        if let Some((dark, background, text)) = &theme {
+            apply_theme(*dark, background, text);
+        }
         // Nothing from the sign-in page is kept on disk once the window closes.
         let view = WebView::builder().network_session(&NetworkSession::new_ephemeral()).build();
         if let Some(settings) = webkit6::prelude::WebViewExt::settings(&view) {
@@ -52,6 +91,7 @@ fn main() -> glib::ExitCode {
         let window = gtk::ApplicationWindow::builder()
             .application(app)
             .title(title.as_str())
+            .icon_name("dev.nilltadios.CosmicAuthenticator")
             .default_width(400)
             .default_height(600)
             .child(&view)
@@ -101,5 +141,13 @@ mod tests {
         assert_eq!(callback_fragment(callback).as_deref(), Some("selector=abc&state=xyz&sk=key&pv=3"));
         assert_eq!(callback_fragment("https://account.proton.me/login"), None);
         assert_eq!(callback_fragment("https://account.proton.me/authorize?app=x#selector=abc"), None);
+    }
+
+    #[test]
+    fn only_plain_hex_colours_reach_the_style_sheet() {
+        assert!(is_hex_colour("#1b1b1b"));
+        assert!(!is_hex_colour("#1b1b1"));
+        assert!(!is_hex_colour("red; }"));
+        assert!(!is_hex_colour("#1b1b1g"));
     }
 }

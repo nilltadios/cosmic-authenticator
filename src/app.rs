@@ -193,9 +193,26 @@ fn login_helper() -> Option<PathBuf> {
     beside.is_file().then_some(beside)
 }
 
+/// The app's theme for the sign-in window, which cannot read the COSMIC theme
+/// inside the Flatpak: `dark` or `light`, then background and text colours.
+fn login_theme() -> [String; 3] {
+    let theme = cosmic::theme::active();
+    let cosmic = theme.cosmic();
+    let hex = |color: Color| {
+        let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        format!("#{:02x}{:02x}{:02x}", byte(color.r), byte(color.g), byte(color.b))
+    };
+    let background = cosmic.background(false);
+    [
+        String::from(if cosmic.is_dark { "dark" } else { "light" }),
+        hex(background.base.into()),
+        hex(background.on.into()),
+    ]
+}
+
 /// Opens the sign-in window and waits for it: the callback fragment, or an
 /// error when the window was closed or could not start.
-fn run_login_window(url: &str, title: &str) -> Result<String, String> {
+fn run_login_window(url: &str, title: &str, theme: &[String; 3]) -> Result<String, String> {
     let helper = login_helper().ok_or_else(|| {
         String::from(
             "The sign-in window (cosmic-authenticator-login) is missing. It is part of the Flatpak; \
@@ -204,6 +221,7 @@ fn run_login_window(url: &str, title: &str) -> Result<String, String> {
     })?;
     let output = std::process::Command::new(helper)
         .args([url, title, USER_AGENT])
+        .args(theme)
         .stderr(std::process::Stdio::inherit())
         .output()
         .map_err(|error| format!("Cannot open the sign-in window: {error}"))?;
@@ -637,7 +655,8 @@ impl AppModel {
         self.sign_in_state = Some(request.state);
         self.sync = SyncStatus::SigningIn;
         let title = if sign_up { "Sign up" } else { "Log in" };
-        background(move || run_login_window(&request.url, title), Message::LoginWindowClosed)
+        let theme = login_theme();
+        background(move || run_login_window(&request.url, title, &theme), Message::LoginWindowClosed)
     }
 
     fn request_logos(&mut self) -> Task<cosmic::Action<Message>> {
