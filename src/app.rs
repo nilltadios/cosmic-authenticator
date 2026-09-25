@@ -336,6 +336,40 @@ fn card_class() -> cosmic::theme::Button {
     }
 }
 
+/// Black or white, whichever reads better on `background` (WCAG contrast).
+fn readable_on(background: Color) -> Color {
+    let linear = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+    let luminance = 0.2126 * linear(background.r) + 0.7152 * linear(background.g) + 0.0722 * linear(background.b);
+    // Equal contrast against black and white is at luminance 0.179.
+    if luminance > 0.179 { Color::BLACK } else { Color::WHITE }
+}
+
+/// An error banner. libcosmic's `widget::warning` draws its text in the
+/// theme's `warning.on`, which some themes leave grey on the orange banner,
+/// hard to read; this picks black or white text for the banner's colour.
+fn error_banner(error: &str, on_close: Option<Message>) -> Element<'static, Message> {
+    let mut row = widget::row::with_capacity(2)
+        .push(widget::text::body(error.to_owned()).width(Length::Fill))
+        .align_y(Alignment::Center);
+    if let Some(message) = on_close {
+        row = row.push(widget::button::icon(icon::from_name("window-close-symbolic").size(16)).on_press(message));
+    }
+    container(row)
+        .padding(10)
+        .width(Length::Fill)
+        .class(cosmic::theme::Container::custom(|theme| {
+            let background: Color = theme.cosmic().warning_color().into();
+            let text = readable_on(background);
+            container::Style {
+                icon_color: Some(text),
+                text_color: Some(text),
+                background: Some(Background::Color(background)),
+                ..container::Style::default()
+            }
+        }))
+        .into()
+}
+
 fn open_file(title: &'static str, filter: Option<FileFilter>) -> Task<cosmic::Action<Message>> {
     cosmic::task::future(async move {
         let mut dialog = file_chooser::open::Dialog::new().title(title);
@@ -972,7 +1006,7 @@ impl AppModel {
         }
 
         if let Some(error) = &form.error {
-            content = content.push(widget::warning(error.clone()));
+            content = content.push(error_banner(error, None));
         }
 
         let mut footer = widget::row::with_capacity(4).spacing(spacing.space_xs).align_y(Alignment::Center);
@@ -1310,7 +1344,7 @@ impl cosmic::Application for AppModel {
         let mut content = widget::column::with_capacity(3).push(self.toolbar()).spacing(spacing.space_s);
 
         if let Some(error) = &self.error {
-            content = content.push(widget::warning(error.clone()).on_close(Message::DismissError));
+            content = content.push(error_banner(error, Some(Message::DismissError)));
         }
 
         let body: Element<_> = if self.visible().is_empty() {
