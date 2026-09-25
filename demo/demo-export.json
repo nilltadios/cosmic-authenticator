@@ -1,0 +1,104 @@
+{
+ "version": 1,
+ "entries": [
+  {
+   "id": "25a3b21f-7f42-46f8-bb5b-4a689ff1ad59",
+   "content": {
+    "uri": "otpauth://totp/Proton:demo%40proton.me?secret=ACBDX6TBEY2FJ5JL562SLEJYXOVW24SR&issuer=Proton&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo@proton.me"
+   },
+   "note": null
+  },
+  {
+   "id": "f88c8ff7-10b4-48f9-9a5f-1807c08376b5",
+   "content": {
+    "uri": "otpauth://totp/Privacy.com:demo%40example.com?secret=DBGMUGNNALR72HMGDTL5BA7HHCOUZ26G&issuer=Privacy.com&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo@example.com"
+   },
+   "note": null
+  },
+  {
+   "id": "9247d791-fdbd-421e-ae04-e357fe5f6cb4",
+   "content": {
+    "uri": "otpauth://totp/Parsec:demo%40example.com?secret=65C24WFEOD6UKXVOZN7R35JYKCIB5PON&issuer=Parsec&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo@example.com"
+   },
+   "note": null
+  },
+  {
+   "id": "96c8aec8-e090-462b-90e9-bef1dd71c1ee",
+   "content": {
+    "uri": "otpauth://totp/Adafruit:demo%40example.com?secret=W3D6CBKQRJBJDG4YLKJZ4675563AM7TO&issuer=Adafruit&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo@example.com"
+   },
+   "note": null
+  },
+  {
+   "id": "d42297a4-d572-4dc0-960b-79743cb5ff65",
+   "content": {
+    "uri": "otpauth://totp/Alpaca:demo%40example.com?secret=CGCU2NCHGRUOOGSSEV3LKSVB64ZSBPZ4&issuer=Alpaca&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo@example.com"
+   },
+   "note": null
+  },
+  {
+   "id": "a0a3be5d-5569-4fa7-9994-e9e25df7800d",
+   "content": {
+    "uri": "otpauth://totp/ngrok:demo%40example.com?secret=MX5XILGAI3SHDLJ6QGVHCGZRCCUL3QIC&issuer=ngrok&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo@example.com"
+   },
+   "note": null
+  },
+  {
+   "id": "5c409403-e338-4cbc-b660-71e0b0793ed0",
+   "content": {
+    "uri": "otpauth://totp/GitHub:demo-user?secret=2D77JO2S2FN6LUPL4GGZJTRBNETZCOQS&issuer=GitHub&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo-user"
+   },
+   "note": null
+  },
+  {
+   "id": "58e4825a-03a9-4f13-98e7-63ba69e1ef96",
+   "content": {
+    "uri": "otpauth://totp/Sprintax:demo?secret=ZOQRHXZKJL64HAFCH3IKZPEPX6S3DBV5&issuer=Sprintax&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo"
+   },
+   "note": null
+  },
+  {
+   "id": "a9cb7eed-5dc7-4886-b001-8afd5824f6eb",
+   "content": {
+    "uri": "otpauth://totp/IBM%20Security%20Verify:demo?secret=24JKMFRYVNDSXCYOBUOWYM242NLKJMWN&issuer=IBM%20Security%20Verify&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo"
+   },
+   "note": null
+  },
+  {
+   "id": "35ecfebb-ae52-4408-b183-33013d0a3732",
+   "content": {
+    "uri": "otpauth://totp/Fidelity:demo-user?secret=4RX2K53XANZLCDSOZL2Q2QS74S4Z4ANH&issuer=Fidelity&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo-user"
+   },
+   "note": null
+  },
+  {
+   "id": "f5221a1d-4f05-4b6d-b37d-6396238a9d24",
+   "content": {
+    "uri": "otpauth://totp/Optery:demo%40example.com?secret=S4LPYSLMSKTC55AJZMNURQRS2KZYNL46&issuer=Optery&algorithm=SHA1&digits=6&period=30",
+    "entry_type": "Totp",
+    "name": "demo@example.com"
+   },
+   "note": null
+  }
+ ]
+}

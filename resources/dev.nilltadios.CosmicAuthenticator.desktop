@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Authenticator
+GenericName=Two-factor codes
+Comment=Native COSMIC client for Proton Authenticator codes (unofficial)
+Exec=cosmic-authenticator
+Icon=dev.nilltadios.CosmicAuthenticator
+Terminal=false
+Categories=Utility;Security;
+Keywords=2FA;TOTP;OTP;authenticator;Proton;
+StartupWMClass=dev.nilltadios.CosmicAuthenticator

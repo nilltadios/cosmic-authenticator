@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.nilltadios.CosmicAuthenticator</id>
+  <name>Authenticator</name>
+  <summary>Two-factor codes, on Proton Authenticator's open-source core</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <description>
+    <p>
+      A native COSMIC app for two-factor (TOTP and Steam) codes. Codes, imports,
+      exports and encryption come from Proton Authenticator's open-source Rust core.
+      Not an official Proton app, and not synced with a Proton account.
+    </p>
+    <ul>
+      <li>Add codes from a setup key, a QR code image or an otpauth:// link</li>
+      <li>Import from Proton Authenticator, Proton Pass, Aegis, 2FAS, Bitwarden, Ente, LastPass and Google Authenticator</li>
+      <li>Export as a Proton Authenticator file, with or without a password</li>
+      <li>Codes are encrypted on disk, with the key in the system keyring</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">dev.nilltadios.CosmicAuthenticator.desktop</launchable>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.2.0" date="2026-09-25"/>
+  </releases>
+</component>

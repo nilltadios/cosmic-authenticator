@@ -1,0 +1,54 @@
+# Flatpak manifest. Build with flatpak/build.sh, which vendors the crates first:
+# the build sandbox has no network, so every crate comes from flatpak/vendor.
+id: dev.nilltadios.CosmicAuthenticator
+# GNOME's runtime, for WebKitGTK: the sign-in window is a web view, as in the
+# official app. The main app does not load WebKit; only the sign-in helper does.
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: cosmic-authenticator
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Service logos are downloaded from each service's site or Google's favicon service.
+  - --share=network
+  # The vault key lives in the Secret Service keyring.
+  - --talk-name=org.freedesktop.secrets
+  # libcosmic reads the COSMIC theme (accent colour, dark mode) from here.
+  - --filesystem=xdg-config/cosmic:ro
+  # Imports and exports go through the file chooser portal, so no file access is needed.
+
+modules:
+  - name: cosmic-authenticator
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/cosmic-authenticator/cargo
+    build-commands:
+      - mkdir -p .cargo && cp flatpak/cargo-config.toml .cargo/config.toml
+      # Cargo does not follow flatpak-builder's --jobs by itself; pass it on.
+      - cargo --offline build --release --locked -j "${FLATPAK_BUILDER_N_JOBS:-4}" -p cosmic-authenticator -p cosmic-authenticator-login
+      - install -Dm755 target/release/cosmic-authenticator /app/bin/cosmic-authenticator
+      - install -Dm755 target/release/cosmic-authenticator-login /app/bin/cosmic-authenticator-login
+      - install -Dm644 resources/dev.nilltadios.CosmicAuthenticator.desktop /app/share/applications/dev.nilltadios.CosmicAuthenticator.desktop
+      - install -Dm644 resources/dev.nilltadios.CosmicAuthenticator.svg /app/share/icons/hicolor/scalable/apps/dev.nilltadios.CosmicAuthenticator.svg
+      - install -Dm644 resources/dev.nilltadios.CosmicAuthenticator.metainfo.xml /app/share/metainfo/dev.nilltadios.CosmicAuthenticator.metainfo.xml
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - target
+          - vendor-ref
+          - demo
+          - demo-data
+          - flatpak/build-dir
+          - flatpak/repo
+          - flatpak/.flatpak-builder
+          - .flatpak-builder
+          - .cargo

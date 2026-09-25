@@ -1,0 +1,173 @@
+# cosmic-authenticator: notes for Claude
+
+## Goal (from the user, 2026-09-25)
+
+The user wants **the official Proton Authenticator desktop app with a lighter UI**,
+and nothing else changed: **every official feature stays the same**, including
+sign-in and sync with their Proton account and phone. This app is meant to
+replace the official one day to day. It is not a separate local-only authenticator.
+
+Why: on 2026-09-24 the official app (1.1.6, Flatpak) idled at about 25% CPU and
+1.3 GB of memory. Almost all of that was its WebKit front end redrawing the
+countdown rings; its Rust side was idle. So the plan was a native libcosmic UI on
+Proton's own Rust core.
+
+When choosing what to work on, feature parity with the official app comes first.
+Extras (QR images, pasted links, Base32 checks) are fine, but never ahead of a
+missing official feature. Sync was left out of the first build, and that was the
+wrong priority.
+
+## Where the official features live
+
+Full details of sign-in and sync (identity values, the fork flow, payload
+encryption, endpoints, merge rules) are in `docs/proton-sync.md`.
+
+The official app's source is in `../Proton-WebClients/applications/authenticator`.
+
+- Its Rust side (`src-tauri/src`, about 800 lines) is only helpers: keyring
+  storage key, theme, the sign-in window, and biometrics (Linux:
+  `biometrics/linux.rs` reports it unavailable).
+- Almost every feature is TypeScript in the web UI, so "only replace the UI"
+  means porting that logic to Rust:
+  - Sign-in: `src/lib/auth/service.ts`, `src/app/components/Settings/Sync/ProtonSyncModal.tsx`
+    (`requestFork(ForkType.LOGIN | SIGNUP)`), and `src-tauri/src/auth.rs`, which
+    opens a 400x600 login webview at the SSO fork URL and takes the URL fragment
+    when navigation reaches a path containing `/login`. Proton's page handles
+    password, 2FA and CAPTCHA, so the app never sees the password.
+  - Sync: `src/lib/entries/sync.ts` and `src/lib/api/requests.ts`. Endpoints:
+    `authenticator/v1/key` (GET and POST; the key is OpenPGP-encrypted to a user
+    key), `authenticator/v1/entry` (GET with `Since`), `authenticator/v1/entry/bulk`
+    (POST create, PUT update with `LastRevision`, DELETE), and
+    `authenticator/v1/entry/{id}/order` (PUT). `ContentFormatVersion: 1`.
+  - Local database, app lock, backups and the storage key: `src/lib/db`,
+    `src/lib/locks`, `src/lib/backup` and `src/lib/storage-key`.
+  - Settings screen: `src/app/views/SettingsScreen.tsx`.
+- Proton's Rust core (`proton-authenticator` in protonpass/proton-pass-common,
+  checked out at `vendor-ref/proton-pass-common`) already has entries, codes,
+  entry encryption, import/export and the sync merge logic
+  (`operations.rs`: `calculate_operations_to_perform`; `ordering.rs`). It has no
+  sign-in, account-key or API client.
+
+## Parity status (2026-09-25, version 0.2.0)
+
+Done: code grid, copy, search, countdown rings; add manually, edit, delete, drag
+to reorder; import from every official provider; export with or without a
+password; hide codes; theme; service logos. App lock (None or Password, as on
+Linux in the official app), in `src/lock.rs`: Argon2id with Proton's
+RECOMMENDED parameters (1 pass, 4 lanes, 512 MiB); the derived key replaces the
+keyring key for the vault and seals the Proton session; 10 wrong passwords in a
+row erase the local data. Tested end to end by `demo/lock-test.sh`. The user
+asked (2026-09-25) that the password never be exposed in plain text: passwords
+live in `secret::Secret`, keys in `lock::Key` and `Zeroizing` buffers (wiped on
+drop, redacted `Debug`); `demo/secret-test.py` scans process memory (with
+positive controls), files and keyring. Keep new password or key fields in those
+types. The app sets up no logger, so nothing is logged today.
+
+Sync status: the user signed in and read-only sync worked with their account
+on 2026-09-25.
+
+Renderer: GPU (`wgpu`) is the default since 2026-09-25, at the user's request
+after they tried both: smooth scrolling and resizing, and 0.2% idle CPU against
+6.1% for the software renderer on their 2560x1440 monitor. The software
+renderer stays built in as a startup fallback (`ICED_BACKEND=tiny-skia` forces it).
+
+GPU choice (checked 2026-09-25 with DP-2 attached): the laptop has a discrete
+Radeon RX 7600M XT (`03:00.0`, renderD128) and an integrated Radeon 680M
+(`78:00.0`, renderD129). iced asks wgpu for `HighPerformance`, and the app drew
+on the discrete GPU, which was already active before it started (it drives the
+external monitor or KWin composites on it). `WGPU_POWER_PREF=low` did not move
+it to the integrated GPU. Cost: a few ms of GPU time per 8 s. **Not yet checked:
+the laptop screen alone**, where the discrete GPU may otherwise sleep and the
+app could wake it; check `/sys/bus/pci/devices/0000:03:00.0/power/runtime_status`
+and `/proc/<pid>/fdinfo` (`drm-pdev`, `drm-engine-gfx`) with no monitor attached.
+
+Built on 2026-09-25, **not yet tried with a real account** (only the user can
+sign in). Checked the same day: the installed Flatpak's sign-in window opens
+and Proton's page loads as "Sign in — To continue to Proton Authenticator".
+Built: sign-in and account creation through `login/` (the WebKit helper,
+`cosmic-authenticator-login`), and read-only sync (`src/proton/`). Codes from
+Proton are read-only in the app (edit and delete are disabled) until two-way
+sync exists; local codes are held back from upload. The session (tokens and
+key password) is in the keyring as `proton-session`; links between local and
+Proton entries are in `$XDG_DATA_HOME/cosmic-authenticator/sync.json`.
+
+Missing, in planned order:
+1. Two-way sync: create, update, delete and reorder on Proton, and uploading
+   an Authenticator key when the account has none.
+2. Automatic backups (daily, chosen folder, last 5
+   kept, password), digit style (plain or boxed), animated code changes, the
+   warning when the storage key is not in the keyring, and help links.
+   The in-app update bar is not needed; Flatpak handles updates.
+
+**Decided by the user on 2026-09-25 ("yes"):** to Proton's API, sign-in and sync
+present this app as the official Proton Authenticator client (`x-pm-appversion`,
+fork app name). The accepted risk is that Proton blocks the client or questions
+the account.
+
+Two-way sync can delete codes on Proton and on the user's phone. Build it only
+after read-only sync works, and test with care. Claude never signs in to the
+user's account; the user does the sign-in tests.
+
+## Machine and project facts
+
+- Fedora 44 with KDE Plasma on Wayland. `~` is `/home/nilllinux22`. This folder
+  sits on another install's home (`.../@home/realcachy`), where the prototype
+  was first built. That install's cargo home is `.../@home/realcachy/.cargo`;
+  this system's is `~/.cargo`.
+- The COSMIC theme is read from `~/.config/cosmic` (the `CosmicTheme.*/v2`
+  folders; the user's accent is red). Never test with `XDG_CONFIG_HOME` pointed
+  elsewhere unless `cosmic` is linked in, or the app shows default teal, which
+  looks like a theming bug.
+- The COSMIC icon theme is not installed here; `main.rs` falls back to the
+  desktop's icon theme (Breeze).
+- Local git repository since 2026-09-25 (first commit that day), no remote.
+  "Commit" means a local commit; push only when asked. The user's Gitea
+  (git.nillsite.com) is retired; do not offer it as a remote.
+- `gio trash` fails on this mount ("system internal mounts"); say so before
+  falling back to `rm`.
+
+## Building and testing
+
+- **One large build at a time.** On 2026-09-25 a background Flatpak build plus a
+  `cargo clippy --release` ran 32 rustc jobs at once and ran this 14 GB laptop
+  out of memory; the OOM killer hit the user's desktop session. Wait for a
+  background build to finish before any other compile. `flatpak/build.sh` caps
+  its own memory and jobs; cap ad-hoc builds the same way
+  (`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=2G nice -n 10 …`,
+  `CARGO_BUILD_JOBS=6`).
+
+- `cargo build --release`, `cargo test --release` (23 tests), `cargo clippy --release`.
+  The sign-in helper (`login/`, `cargo build -p cosmic-authenticator-login`)
+  needs WebKitGTK 6.0 development files, which this host lacks
+  (`webkitgtk6.0-devel`); it builds in the Flatpak (GNOME 50 SDK). A native
+  build without it shows an error when signing in. To check the helper alone
+  (about a minute, instead of a full Flatpak build):
+  `systemd-run --user --scope -p MemoryMax=4G flatpak run --filesystem="$PWD" --filesystem=home/.cargo --command=sh org.gnome.Sdk//50 -c 'export PATH=/usr/lib/sdk/rust-stable/bin:$PATH; cargo --offline test --release -j 4 -p cosmic-authenticator-login --target-dir target/sdk'`.
+  `login/Cargo.toml` turns on gtk4's `v4_10` because webkit6 0.6.1 needs it
+  but does not ask for it.
+- OpenPGP test fixtures: `tests/fixtures/make-pgp-fixtures.sh` (GnuPG, all calls
+  non-interactive).
+- Flatpak: `flatpak/build.sh`, which writes `flatpak/dev.nilltadios.CosmicAuthenticator.flatpak`.
+  It is installed for the user (`flatpak install --user …`); its vault is in
+  `~/.var/app/dev.nilltadios.CosmicAuthenticator`, separate from the native build's.
+- Measure on the user's real desktop: `demo/measure.sh 60` and
+  `demo/measure.sh 60 --flatpak`. The user asked for their real session, not
+  headless. Windows open on their screen, so say so first.
+- `demo/screenshots.sh` runs headless sway (with no pointer) and uses the
+  `preview` feature (`AUTHENTICATOR_PREVIEW=<view>`), so re-shooting does not
+  steal focus. It cannot test clicks: right-click menus, dragging and the file
+  dialogs are still untested by hand.
+- The user works on the built-in screen (eDP-1) and asked for test windows on
+  the external monitor, **DP-2** (2026-09-25). Launch every desktop test through
+  `demo/on-screen.sh DP-2 …` (`--fullscreen` to fill it), which places the window
+  there without taking focus. The general how-to is the user's skill
+  `kde-desktop-app-testing` (`~/.claude/skills/kde-desktop-app-testing`), which
+  also has `capture-screen.sh` for a one-monitor screenshot. Never use
+  `spectacle --activewindow`; it captured the user's Claude window once.
+- The vault key and Proton session live in the keyring under service
+  `dev.nilltadios.CosmicAuthenticator`, **shared by every copy of the app,
+  including the user's real Flatpak**. Turning the app lock on deletes the
+  vault key, so a test that did that on the real service would make the real
+  vault unreadable. Every test run sets
+  `AUTHENTICATOR_KEYRING_SERVICE=dev.nilltadios.CosmicAuthenticator.test` (the
+  demo scripts do). Never run the app against the real service with test data.
