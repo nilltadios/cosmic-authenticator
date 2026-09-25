@@ -110,21 +110,43 @@ user's account; the user does the sign-in tests.
 
 ## Machine and project facts
 
-- Fedora 44 with KDE Plasma on Wayland. `~` is `/home/nilllinux22`. This folder
-  sits on another install's home (`.../@home/realcachy`), where the prototype
-  was first built. That install's cargo home is `.../@home/realcachy/.cargo`;
-  this system's is `~/.cargo`.
-- The COSMIC theme is read from `~/.config/cosmic` (the `CosmicTheme.*/v2`
-  folders; the user's accent is red). Never test with `XDG_CONFIG_HOME` pointed
-  elsewhere unless `cosmic` is linked in, or the app shows default teal, which
-  looks like a theming bug.
-- The COSMIC icon theme is not installed here; `main.rs` falls back to the
-  desktop's icon theme (Breeze).
+The project folder is on the `realcachy` home, which two installs on the same
+laptop use. Check which one is running (`/etc/os-release`, `$XDG_CURRENT_DESKTOP`)
+before following a machine-specific note.
+
+**CachyOS with COSMIC on Wayland** (checked 2026-09-25):
+- `~` is `/home/realcachy`; cargo home `~/.cargo`.
+- Screens: eDP-1 (built in, 1920x1200 at 125%) and DP-1 (external, 2560x1440
+  at 150%). The KWin placement script (`demo/on-screen.sh`) does not work here;
+  COSMIC opens test windows on the screen in use (eDP-1).
+- `flatpak-builder` exists only as the Flathub app `org.flatpak.Builder`;
+  `flatpak/build.sh` falls back to it.
+- Git has no name or email set. Commit with `git -c user.name=… -c user.email=…`,
+  using the author of the first commit (`git log --format='%an <%ae>' f3656e0`).
+- `gio trash` works.
+- Screenshots: `cosmic-screenshot --interactive=false --modal=false --notify=false -s <dir>`
+  captures both screens side by side (logical size, eDP-1 first). Crop with
+  ImageMagick (`magick in.png -crop WxH+X+Y out.png`); PIL is not installed.
+  The image shows the whole desktop, so keep it in a scratch folder and delete it after.
+  The user lets Claude open test windows and check them this way without asking (2026-09-25).
+
+**Fedora 44 with KDE Plasma on Wayland:**
+- `~` is `/home/nilllinux22`; this folder is at `.../@home/realcachy`, with that
+  install's cargo home at `.../@home/realcachy/.cargo` and Fedora's at `~/.cargo`.
+- The COSMIC icon theme is not installed; `main.rs` falls back to the desktop's
+  icon theme (Breeze).
+- `gio trash` fails on this mount ("system internal mounts"); say so before
+  falling back to `rm`.
+- Test windows go on the external monitor, DP-2 (see Building and testing).
+
+Both:
+- The COSMIC theme is read from `~/.config/cosmic` (the
+  `com.system76.CosmicTheme.*` folders; the user's accent is red). Never test
+  with `XDG_CONFIG_HOME` pointed elsewhere unless `cosmic` is linked in, or the
+  app shows default teal, which looks like a theming bug.
 - Local git repository since 2026-09-25 (first commit that day), no remote.
   "Commit" means a local commit; push only when asked. The user's Gitea
   (git.nillsite.com) is retired; do not offer it as a remote.
-- `gio trash` fails on this mount ("system internal mounts"); say so before
-  falling back to `rm`.
 
 ## Building and testing
 
@@ -136,7 +158,7 @@ user's account; the user does the sign-in tests.
   (`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=2G nice -n 10 …`,
   `CARGO_BUILD_JOBS=6`).
 
-- `cargo build --release`, `cargo test --release` (23 tests), `cargo clippy --release`.
+- `cargo build --release`, `cargo test --release` (29 tests), `cargo clippy --release`.
   The sign-in helper (`login/`, `cargo build -p cosmic-authenticator-login`)
   needs WebKitGTK 6.0 development files, which this host lacks
   (`webkitgtk6.0-devel`); it builds in the Flatpak (GNOME 50 SDK). A native
@@ -157,7 +179,7 @@ user's account; the user does the sign-in tests.
   `preview` feature (`AUTHENTICATOR_PREVIEW=<view>`), so re-shooting does not
   steal focus. It cannot test clicks: right-click menus, dragging and the file
   dialogs are still untested by hand.
-- The user works on the built-in screen (eDP-1) and asked for test windows on
+- On Fedora/KDE: the user works on the built-in screen (eDP-1) and asked for test windows on
   the external monitor, **DP-2** (2026-09-25). Launch every desktop test through
   `demo/on-screen.sh DP-2 …` (`--fullscreen` to fill it), which places the window
   there without taking focus. The general how-to is the user's skill
@@ -171,3 +193,8 @@ user's account; the user does the sign-in tests.
   vault unreadable. Every test run sets
   `AUTHENTICATOR_KEYRING_SERVICE=dev.nilltadios.CosmicAuthenticator.test` (the
   demo scripts do). Never run the app against the real service with test data.
+- To give the Flatpak a test data folder, set the variables inside the sandbox:
+  `flatpak run --command=sh <app id> -c "XDG_DATA_HOME=… AUTHENTICATOR_KEYRING_SERVICE=….test exec cosmic-authenticator"`.
+  `flatpak run --env=XDG_DATA_HOME=…` is silently overridden, so the app would
+  open the real vault and app lock (happened 2026-09-25, no harm). Check
+  `/proc/<pid>/environ` of the running app.
