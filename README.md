@@ -59,6 +59,28 @@ It follows the COSMIC theme in `~/.config/cosmic` (accent colour, light or dark)
 Outside COSMIC, where the COSMIC icon theme is usually missing, it uses the
 desktop's icon theme (KDE's, then GTK's, then Breeze or Adwaita).
 
+### Updating
+
+`flatpak/release.sh` releases a new version to the installed Flatpak. It raises
+the version, runs the tests, builds, commits, and updates the app from the local
+repository `flatpak/repo`. That repository is added once as the `cosmicauthenticator`
+remote, so `flatpak update` can reach the app (a bundle install cannot):
+
+```bash
+flatpak remote-add --user --no-gpg-verify cosmicauthenticator "file://$PWD/flatpak/repo"
+flatpak install --user --reinstall cosmicauthenticator dev.nilltadios.CosmicAuthenticator
+flatpak/release.sh 0.3.0
+```
+
+The reinstall keeps the vault, app lock and Proton session.
+
+`./check-upstream.sh` compares the official app's version (from Proton's update
+feed) with the one this app sends to Proton, and the pinned Proton core and
+libcosmic with their upstream versions. When Proton releases a new version of the
+official app, port its changes before raising `APP_VERSION` in
+`src/proton/api.rs`. Proton eventually refuses old versions; the app then says
+sync is paused until it is updated.
+
 ## Using it
 
 - **Copy a code:** click its card. Right-click for *Copy next code*, *Edit* and *Delete*.

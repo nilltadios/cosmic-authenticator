@@ -15,6 +15,10 @@ pub const APP_VERSION: &str = "linux-authenticator@1.1.6";
 /// The official sign-in window's user agent (`src-tauri/src/auth.rs`).
 pub const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) ProtonAuthenticator/1.1.6 Electron/1.0.0";
 
+/// Proton's reply when it no longer accepts `APP_VERSION` (`APP_VERSION_BAD`
+/// in `packages/shared/lib/errors.ts`).
+const APP_VERSION_BAD: i64 = 5003;
+
 /// Largest response read; entry pages are far smaller.
 const MAX_RESPONSE: u64 = 32 << 20;
 
@@ -46,6 +50,10 @@ impl ApiError {
         match self {
             ApiError::Offline(detail) => format!("Cannot reach Proton ({detail})"),
             ApiError::SignedOut => String::from("The Proton session has ended. Sign in again to sync."),
+            ApiError::Proton { code: APP_VERSION_BAD, .. } => String::from(
+                "Proton no longer accepts this version of Authenticator, so sync is paused. Update the app; \
+                 your codes still work here.",
+            ),
             ApiError::Proton { message, code, .. } if !message.is_empty() => format!("{message} (Proton error {code})"),
             ApiError::Proton { status, code, .. } => format!("Proton refused the request (HTTP {status}, error {code})"),
             ApiError::Invalid(detail) => format!("Unexpected reply from Proton: {detail}"),
@@ -171,8 +179,10 @@ impl Client {
             "RedirectURI": "https://protonmail.com",
         });
         let (status, value) = self.send(Method::Post, "auth/v4/refresh", Some(&body), false)?;
-        // A refused refresh token means the session was revoked or expired.
-        if (400..500).contains(&status) {
+        // A refused refresh token means the session was revoked or expired,
+        // unless Proton refused the app version, which signing in again won't fix.
+        let version_bad = value.get("Code").and_then(Value::as_i64) == Some(APP_VERSION_BAD);
+        if (400..500).contains(&status) && !version_bad {
             return Err(ApiError::SignedOut);
         }
         let value = Self::check(status, value)?;
@@ -183,5 +193,17 @@ impl Client {
         self.tokens = Some(Tokens { uid: field("UID").unwrap_or(tokens.uid), access_token, refresh_token });
         self.tokens_changed = true;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outdated_version_is_reported_as_such() {
+        let value = json!({ "Code": APP_VERSION_BAD, "Error": "Please update" });
+        let error = Client::check(400, value).unwrap_err();
+        assert!(error.message().contains("no longer accepts this version"), "{}", error.message());
     }
 }

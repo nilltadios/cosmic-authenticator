@@ -97,7 +97,8 @@ Missing, in planned order:
 2. Automatic backups (daily, chosen folder, last 5
    kept, password), digit style (plain or boxed), animated code changes, the
    warning when the storage key is not in the keyring, and help links.
-   The in-app update bar is not needed; Flatpak handles updates.
+   The in-app update bar is not needed: `flatpak update` delivers new builds
+   through the local `cosmicauthenticator` remote (see Releasing).
 
 **Decided by the user on 2026-09-25 ("yes"):** to Proton's API, sign-in and sync
 present this app as the official Proton Authenticator client (`x-pm-appversion`,
@@ -198,3 +199,27 @@ Both:
   `flatpak run --env=XDG_DATA_HOME=…` is silently overridden, so the app would
   open the real vault and app lock (happened 2026-09-25, no harm). Check
   `/proc/<pid>/environ` of the running app.
+
+## Releasing
+
+- `flatpak/release.sh X.Y.Z` releases to the installed Flatpak: raises the
+  version (both Cargo.toml files, Cargo.lock, metainfo), runs the tests,
+  builds, commits "Release X.Y.Z", then `flatpak update`s the app from the local
+  `cosmicauthenticator` remote (`file://…/flatpak/repo`, added 2026-09-27 on
+  CachyOS). It needs a clean tree, because the Flatpak builds the working tree.
+  It updates the user's real app, so ask before running it.
+- The installed app was first installed from the bundle (origin
+  `cosmicauthenticator-origin`, disabled), which `flatpak update` never
+  updates. Switching it needs one `flatpak install --user --reinstall
+  cosmicauthenticator dev.nilltadios.CosmicAuthenticator`; the user runs that.
+  release.sh prints this reminder while the origin is still the bundle.
+- `./check-upstream.sh` reads the official app's version from Proton's update
+  feed (`proton.me/download/authenticator/linux/latest.json`, still 1.1.6 on
+  2026-09-27) and compares it with `APP_VERSION`, and compares the Proton core
+  and libcosmic pins with upstream. Run it at the start of parity work. On a new
+  official version: diff `../Proton-WebClients/applications/authenticator`
+  between the versions, port the changes, then raise `APP_VERSION` and
+  `USER_AGENT` (`src/proton/api.rs`) and `docs/proton-sync.md`. Proton refuses
+  outdated versions with error 5003; the app shows "sync is paused" for it.
+- Update the Proton core or libcosmic (`cargo update -p …`) in their own
+  commits, not mixed with sync changes, so a regression points at one cause.
