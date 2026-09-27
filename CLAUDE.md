@@ -208,11 +208,10 @@ Both:
   `cosmicauthenticator` remote (`file://…/flatpak/repo`, added 2026-09-27 on
   CachyOS). It needs a clean tree, because the Flatpak builds the working tree.
   It updates the user's real app, so ask before running it.
-- The installed app was first installed from the bundle (origin
-  `cosmicauthenticator-origin`, disabled), which `flatpak update` never
-  updates. Switching it needs one `flatpak install --user --reinstall
-  cosmicauthenticator dev.nilltadios.CosmicAuthenticator`; the user runs that.
-  release.sh prints this reminder while the origin is still the bundle.
+- The installed app now comes from the `cosmicauthenticator` remote (the user
+  reinstalled it from there on 2026-09-27; data kept). It was first installed
+  from the bundle, whose origin `flatpak update` never updates; release.sh
+  prints the reinstall command if an install is still on the bundle.
 - `./check-upstream.sh` reads the official app's version from Proton's update
   feed (`proton.me/download/authenticator/linux/latest.json`, still 1.1.6 on
   2026-09-27) and compares it with `APP_VERSION`, and compares the Proton core
