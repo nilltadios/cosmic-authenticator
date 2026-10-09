@@ -8,6 +8,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const API_URL: &str = "https://authenticator.proton.me/api";
+
+/// Proton's API, or a local test server named by `AUTHENTICATOR_API_URL`
+/// (demo/sync-test.sh). Only loopback addresses are taken, so the variable
+/// can never send the session anywhere else.
+fn api_url() -> String {
+    std::env::var("AUTHENTICATOR_API_URL")
+        .ok()
+        .filter(|url| url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:"))
+        .unwrap_or_else(|| String::from(API_URL))
+}
 pub const SSO_URL: &str = "https://account.proton.me";
 pub const APP_NAME: &str = "proton-authenticator";
 /// The official Linux app's client ID and version.
@@ -88,7 +98,7 @@ impl Client {
     }
 
     fn send(&self, method: Method, path: &str, body: Option<&Value>, auth: bool) -> Result<(u16, Value), ApiError> {
-        let url = format!("{API_URL}/{path}");
+        let url = format!("{}/{path}", api_url());
         let mut headers = vec![
             ("x-pm-appversion", APP_VERSION.to_string()),
             ("Accept", String::from("application/vnd.protonmail.v1+json")),

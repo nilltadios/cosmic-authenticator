@@ -107,7 +107,8 @@ Code: `src/lib/entries/sync.ts`, `src/lib/api/requests.ts`, `src/lib/api/types.t
   snapshot. Tombstones still on Proton are deleted there (`DELETE entry/bulk`)
   and then dropped; their remote copies are left out of the merge so they do not
   come back. `Push` without a remote id is a create (`POST entry/bulk`, with the
-  first account key's Authenticator key); with one it is an update (`PUT
+  first account key's Authenticator key, in local order: the core returns
+  entries in hash order, and the official app sorts its pushes too); with one it is an update (`PUT
   entry/bulk`, `LastRevision` = Proton's revision). A failed request is
   reported and the change stays pending for the next sync.
 - **Applying** (`apply`) runs on the UI thread, by entry id. A code changed

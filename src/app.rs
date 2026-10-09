@@ -1948,6 +1948,19 @@ fn preview_messages() -> Vec<Message> {
         "export" => vec![Message::RequestExport],
         "hidden" => vec![Message::HideCodes(true)],
         "search" => vec![Message::Search(String::from("demo-user"))],
+        // Sync steps, for demo/sync-test.sh. They run while the startup sync
+        // is still going, so they also test changes made during a sync.
+        "sync-add" => vec![
+            Message::AddManually,
+            Message::Form(Field::Issuer(String::from("Added"))),
+            Message::Form(Field::Name(String::from("gui@example.invalid"))),
+            Message::Form(Field::Secret(String::from("JBSWY3DPEHPK3PXP"))),
+            Message::SaveForm,
+        ],
+        "sync-edit" => vec![Message::Edit(0), Message::Form(Field::Issuer(String::from("Edited"))), Message::SaveForm],
+        "sync-delete" => vec![Message::RequestDelete(1), Message::ConfirmDelete],
+        "sync-reorder" => vec![Message::Reorder(vec![1, 0])],
+        "sync-off" => vec![Message::SyncToggle(false)],
         // App lock steps, for demo/lock-test.sh. The password is a test value.
         "lock-create" => vec![
             Message::AppLock(1),

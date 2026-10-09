@@ -66,8 +66,9 @@ types. The app sets up no logger, so nothing is logged today.
 Sync status: the user signed in and read-only sync worked with their account
 on 2026-09-25. Two-way sync was built on 2026-10-09 (`src/proton/sync.rs`,
 how it works in `docs/proton-sync.md`) and is **not yet tried with the real
-account**; its unit tests cover the merge, and GnuPG reads a key upload made by
-it. The first two-way sync uploads the local codes that read-only sync held back.
+account**. Tested the same day by unit tests, by GnuPG reading a key upload,
+and end to end by `demo/sync-test.sh` against a fake Proton (all passing). The
+first two-way sync uploads the local codes that read-only sync held back.
 
 Renderer: GPU (`wgpu`) is the default since 2026-09-25, at the user's request
 after they tried both: smooth scrolling and resizing, and 0.2% idle CPU against
@@ -157,7 +158,7 @@ Both:
   (`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=2G nice -n 10 …`,
   `CARGO_BUILD_JOBS=6`).
 
-- `cargo build --release`, `cargo test --release` (37 tests), `cargo clippy --release`.
+- `cargo build --release`, `cargo test --release` (38 tests, 3 more ignored ones run by `demo/sync-test.sh`), `cargo clippy --release`.
   The sign-in helper (`login/`, `cargo build -p cosmic-authenticator-login`)
   needs WebKitGTK 6.0 development files, which this host lacks
   (`webkitgtk6.0-devel`); it builds in the Flatpak (GNOME 50 SDK). A native
@@ -166,6 +167,14 @@ Both:
   `systemd-run --user --scope -p MemoryMax=4G flatpak run --filesystem="$PWD" --filesystem=home/.cargo --command=sh org.gnome.Sdk//50 -c 'export PATH=/usr/lib/sdk/rust-stable/bin:$PATH; cargo --offline test --release -j 4 -p cosmic-authenticator-login --target-dir target/sdk'`.
   `login/Cargo.toml` turns on gtk4's `v4_10` because webkit6 0.6.1 needs it
   but does not ask for it.
+- Sync end to end: `demo/sync-test.sh [screenshot dir]` starts
+  `demo/mock-proton.py` (a fake Proton API on 127.0.0.1 with the fixture account
+  key) and points the app at it with `AUTHENTICATOR_API_URL`, which only accepts
+  loopback addresses. It runs two devices through the server, then the app
+  itself (preview steps `sync-add`, `sync-edit`, `sync-delete`, `sync-reorder`,
+  `sync-off`) with a "phone" changing codes, and checks the server after each.
+  Windows open on the screen in use. It builds with the `preview` feature, so
+  rebuild normally afterwards before measuring.
 - OpenPGP test fixtures: `tests/fixtures/make-pgp-fixtures.sh` (GnuPG, all calls
   non-interactive).
 - Flatpak: `flatpak/build.sh`, which writes `flatpak/dev.nilltadios.CosmicAuthenticator.flatpak`.

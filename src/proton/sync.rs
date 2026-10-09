@@ -393,6 +393,11 @@ fn plan(snapshot: &Snapshot, remote: Vec<Remote>, unreadable: usize, now: i64) -
             (AuthenticatorOperation::DeleteLocalAndRemote, None) => {}
         }
     }
+    // The core returns local entries in hash order. Upload in the user's
+    // order, as the official app sorts its pushes, so Proton keeps that order.
+    let position: HashMap<&str, usize> =
+        snapshot.entries.iter().enumerate().map(|(index, entry)| (entry.id.as_str(), index)).collect();
+    plan.creates.sort_by_key(|entry| position.get(entry.id.as_str()).copied().unwrap_or(usize::MAX));
     plan
 }
 
@@ -660,6 +665,14 @@ mod tests {
     }
 
     #[test]
+    fn uploads_new_codes_in_the_users_order() {
+        let codes: Vec<_> = (0..20).map(|i| entry(&format!("Code {i}"))).collect();
+        let snapshot = Snapshot { entries: codes.clone(), links: Links::new() };
+        let creates = plan(&snapshot, vec![], 0, 1000).creates;
+        assert_eq!(creates, codes);
+    }
+
+    #[test]
     fn remote_edits_replace_synced_copies() {
         let original = entry("Old");
         let mut edited = entry("New");
@@ -752,6 +765,137 @@ mod tests {
     fn links_from_read_only_sync_read_as_synced() {
         let old: Link = serde_json::from_str(r#"{"remote_id":"r","revision":3,"key_id":"k","modify_time":5}"#).unwrap();
         assert_eq!(old.state, State::Synced);
+    }
+
+    /// One device for the end-to-end tests: a session and its codes.
+    struct Device {
+        session: Session,
+        entries: Vec<AuthenticatorEntry>,
+        links: Links,
+    }
+
+    impl Device {
+        fn new(entries: Vec<AuthenticatorEntry>) -> Self {
+            let tokens = Tokens { uid: "uid-1".into(), access_token: "access-0".into(), refresh_token: "refresh-0".into() };
+            let key_password = Zeroizing::new(include_str!("../../tests/fixtures/user-key.password").to_string());
+            Device { session: Session { tokens, key_password, email: String::new() }, entries, links: Links::new() }
+        }
+
+        fn sync(&mut self) -> Merged {
+            let snapshot = Snapshot { entries: self.entries.clone(), links: self.links.clone() };
+            let outcome = run(&mut self.session, snapshot.clone()).expect("sync");
+            assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+            apply(&mut self.entries, &mut self.links, &snapshot, outcome)
+        }
+
+        fn edit(&mut self, issuer: &str, new_issuer: &str) {
+            let index = self.entries.iter().position(|entry| entry.issuer() == issuer).expect(issuer);
+            let mut edited = entry(new_issuer);
+            edited.id = self.entries[index].id.clone();
+            self.entries[index] = edited;
+            mark_edited(&mut self.links, &self.entries[index].id.clone());
+        }
+
+        fn issuers(&self) -> Vec<String> {
+            self.entries.iter().map(AuthenticatorEntry::issuer).collect()
+        }
+    }
+
+    fn server_state() -> Value {
+        let url = format!("{}/_state", std::env::var("AUTHENTICATOR_API_URL").unwrap());
+        let text = ureq::get(&url).call().unwrap().body_mut().read_to_string().unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn server_entries() -> usize {
+        server_state()["Entries"].as_array().unwrap().len()
+    }
+
+    /// Two devices syncing through demo/mock-proton.py, over real HTTP and
+    /// real encryption. Run by demo/sync-test.sh.
+    #[test]
+    #[ignore = "needs demo/mock-proton.py; run demo/sync-test.sh"]
+    fn two_devices_through_a_local_server() {
+        assert!(std::env::var("AUTHENTICATOR_API_URL").is_ok_and(|url| url.starts_with("http://127.0.0.1:")));
+        let mut laptop = Device::new(vec![entry("GitHub"), entry("GitLab")]);
+        let mut phone = Device::new(vec![entry("Dropbox")]);
+
+        // A new account: the laptop makes the Authenticator key and uploads its codes.
+        assert_eq!(laptop.sync(), Merged { uploaded: 2, ..Merged::default() });
+        assert_ne!(laptop.session.tokens.access_token, "access-0", "the expired token was refreshed");
+        assert_eq!((server_state()["Keys"].as_array().unwrap().len(), server_entries()), (1, 2));
+
+        // The phone reads them with the same key and adds its own.
+        assert_eq!(phone.sync(), Merged { added: 2, uploaded: 1, ..Merged::default() });
+        assert_eq!(server_state()["Keys"].as_array().unwrap().len(), 1, "no second key");
+        assert_eq!(laptop.sync().added, 1);
+        assert_eq!(laptop.issuers(), ["GitHub", "GitLab", "Dropbox"]);
+        assert_eq!(phone.issuers(), laptop.issuers());
+
+        // An edit on the phone reaches the laptop.
+        phone.edit("GitHub", "GitHub Work");
+        assert_eq!(phone.sync().uploaded, 1);
+        assert_eq!(laptop.sync().updated, 1);
+        assert_eq!(laptop.issuers(), ["GitHub Work", "GitLab", "Dropbox"]);
+
+        // A deletion on the laptop reaches Proton, then the phone.
+        let gitlab = laptop.entries.remove(1);
+        mark_deleted(&mut laptop.links, &gitlab.id);
+        assert_eq!(laptop.sync().deleted_remote, 1);
+        assert!(!laptop.links.contains_key(&gitlab.id), "the tombstone is cleared");
+        assert_eq!(server_entries(), 2);
+        assert_eq!(phone.sync().removed, 1);
+        assert_eq!(phone.issuers(), ["GitHub Work", "Dropbox"]);
+
+        // A drag on the laptop: Dropbox to the top.
+        let (remote_id, after) = moved(&laptop.entries, &[1, 0], &laptop.links).unwrap();
+        assert_eq!(after, None);
+        reorder(&mut laptop.session, &remote_id, after.as_deref()).unwrap();
+        laptop.sync();
+        phone.sync();
+        assert_eq!(phone.issuers(), ["Dropbox", "GitHub Work"]);
+        assert_eq!(laptop.issuers(), phone.issuers());
+
+        // Both edit the same code; the later edit wins on both, as Proton's rules say.
+        laptop.edit("Dropbox", "Dropbox (laptop)");
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        phone.edit("Dropbox", "Dropbox (phone)");
+        phone.sync();
+        laptop.sync();
+        assert_eq!(laptop.issuers(), ["Dropbox (phone)", "GitHub Work"]);
+        assert_eq!(phone.issuers(), laptop.issuers());
+        assert!(laptop.links.values().chain(phone.links.values()).all(|link| link.state == State::Synced));
+
+        sign_out(&laptop.session).unwrap();
+    }
+
+    /// Plays the phone for demo/sync-test.sh: syncs, then adds a code
+    /// ("Phone") or deletes one named by AUTHENTICATOR_TEST_DELETE.
+    #[test]
+    #[ignore = "needs demo/mock-proton.py; run demo/sync-test.sh"]
+    fn phone_changes_codes() {
+        assert!(std::env::var("AUTHENTICATOR_API_URL").is_ok_and(|url| url.starts_with("http://127.0.0.1:")));
+        let mut phone = Device::new(vec![]);
+        phone.sync();
+        match std::env::var("AUTHENTICATOR_TEST_DELETE") {
+            Ok(issuer) => {
+                let index = phone.entries.iter().position(|entry| entry.issuer() == issuer).expect("code to delete");
+                let gone = phone.entries.remove(index);
+                mark_deleted(&mut phone.links, &gone.id);
+            }
+            Err(_) => phone.entries.push(entry("Phone")),
+        }
+        phone.sync();
+    }
+
+    /// Seeds a device for the app under test (demo/sync-test.sh): two codes and
+    /// a session in the test keyring and XDG_DATA_HOME.
+    #[test]
+    #[ignore = "run by demo/sync-test.sh"]
+    fn seed_app_device() {
+        assert!(crate::store::keyring_service().ends_with(".test"), "use the test keyring");
+        crate::store::save(&[entry("Seeded One"), entry("Seeded Two")]).unwrap();
+        crate::proton::session::save(&Device::new(vec![]).session, None).unwrap();
     }
 
     #[test]
