@@ -65,6 +65,7 @@ impl ApiError {
 pub enum Method {
     Get,
     Post,
+    Put,
     Delete,
 }
 
@@ -105,6 +106,7 @@ impl Client {
             (method, body) => {
                 let builder = match method {
                     Method::Post => self.agent.post(&url),
+                    Method::Put => self.agent.put(&url),
                     _ => self.agent.delete(&url).force_send_body(),
                 };
                 let text = body.map(Value::to_string).unwrap_or_else(|| String::from("{}"));

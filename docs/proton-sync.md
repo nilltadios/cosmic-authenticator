@@ -88,9 +88,40 @@ Code: `src/lib/entries/sync.ts`, `src/lib/api/requests.ts`, `src/lib/api/types.t
 - **When.** On session resume, after sign-in, and before sign-out. No timer
   was found (`grep setInterval` in `src` finds nothing).
 
-## Read-only rules used here
+## How this app syncs
 
-Read-only sync applies only the local side of the merge: `Upsert` and
-`DeleteLocal`. `Push` and `DeleteLocalAndRemote` are held back until two-way
-sync exists. If the account has no Authenticator key, read-only sync stops and
-says so rather than uploading one.
+`src/proton/sync.rs` follows the official code; differences are listed below.
+
+- **State.** `sync.json` maps each local entry id to its Proton entry
+  (`remote_id`, `revision`, `key_id`, `modify_time`, `state`), like the
+  official `syncMetadata`. Links saved by read-only sync had no `state` and
+  read as `Synced`.
+- **Local changes** (`src/store/entries.ts`). Edit: `PendingSync` with
+  `modify_time` now. Delete: the code leaves the vault, and its link stays as a
+  `PendingToDelete` tombstone. The official app keeps the whole item hidden in
+  its database; this app keeps only the ids, so a deleted secret is not left on
+  disk. Codes never synced have no link and count as `PendingSync`, timed now.
+- **A sync** (`run`): account keys, Authenticator keys (making and uploading
+  one when the primary account key has none, and stopping if keys exist but
+  none decrypt), every entry, then `calculate_operations_to_perform` on the
+  snapshot. Tombstones still on Proton are deleted there (`DELETE entry/bulk`)
+  and then dropped; their remote copies are left out of the merge so they do not
+  come back. `Push` without a remote id is a create (`POST entry/bulk`, with the
+  first account key's Authenticator key); with one it is an update (`PUT
+  entry/bulk`, `LastRevision` = Proton's revision). A failed request is
+  reported and the change stays pending for the next sync.
+- **Applying** (`apply`) runs on the UI thread, by entry id. A code changed
+  since the snapshot keeps its change; what Proton returned for it is still
+  recorded, so a create is never sent twice. Then the two-tier order: synced
+  codes first in Proton's order, the rest in local order.
+- **When.** At startup and after sign-in, as the official app; also after every
+  add, edit, delete and import (the official app sends each change on its own
+  request and imports at the next start). One sync runs at a time; changes made
+  meanwhile start another. Sign-out syncs once more, then ends the session.
+- **Reorder.** As the official app, only the moved code's place goes to Proton
+  (`PUT entry/{id}/order {AfterID}`). `AfterID` is the nearest synced code above
+  it; the official app takes the code right above, which is the same while
+  synced codes come first.
+- **Unreadable entries.** When some entries do not decrypt, no local code is
+  removed and no tombstone is dropped, since a missing entry might only be an
+  unreadable one. The official app has no such guard.

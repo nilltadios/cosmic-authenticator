@@ -64,7 +64,10 @@ positive controls), files and keyring. Keep new password or key fields in those
 types. The app sets up no logger, so nothing is logged today.
 
 Sync status: the user signed in and read-only sync worked with their account
-on 2026-09-25.
+on 2026-09-25. Two-way sync was built on 2026-10-09 (`src/proton/sync.rs`,
+how it works in `docs/proton-sync.md`) and is **not yet tried with the real
+account**; its unit tests cover the merge, and GnuPG reads a key upload made by
+it. The first two-way sync uploads the local codes that read-only sync held back.
 
 Renderer: GPU (`wgpu`) is the default since 2026-09-25, at the user's request
 after they tried both: smooth scrolling and resizing, and 0.2% idle CPU against
@@ -85,16 +88,12 @@ Built on 2026-09-25, **not yet tried with a real account** (only the user can
 sign in). Checked the same day: the installed Flatpak's sign-in window opens
 and Proton's page loads as "Sign in — To continue to Proton Authenticator".
 Built: sign-in and account creation through `login/` (the WebKit helper,
-`cosmic-authenticator-login`), and read-only sync (`src/proton/`). Codes from
-Proton are read-only in the app (edit and delete are disabled) until two-way
-sync exists; local codes are held back from upload. The session (tokens and
+`cosmic-authenticator-login`), and sync (`src/proton/`). The session (tokens and
 key password) is in the keyring as `proton-session`; links between local and
 Proton entries are in `$XDG_DATA_HOME/cosmic-authenticator/sync.json`.
 
 Missing, in planned order:
-1. Two-way sync: create, update, delete and reorder on Proton, and uploading
-   an Authenticator key when the account has none.
-2. Automatic backups (daily, chosen folder, last 5
+1. Automatic backups (daily, chosen folder, last 5
    kept, password), digit style (plain or boxed), animated code changes, the
    warning when the storage key is not in the keyring, and help links.
    The in-app update bar is not needed: `flatpak update` delivers new builds
@@ -105,9 +104,8 @@ present this app as the official Proton Authenticator client (`x-pm-appversion`,
 fork app name). The accepted risk is that Proton blocks the client or questions
 the account.
 
-Two-way sync can delete codes on Proton and on the user's phone. Build it only
-after read-only sync works, and test with care. Claude never signs in to the
-user's account; the user does the sign-in tests.
+Two-way sync can delete codes on Proton and on the user's phone; change it with
+care. Claude never signs in to the user's account; the user does the sign-in tests.
 
 ## Machine and project facts
 
@@ -159,7 +157,7 @@ Both:
   (`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=2G nice -n 10 …`,
   `CARGO_BUILD_JOBS=6`).
 
-- `cargo build --release`, `cargo test --release` (29 tests), `cargo clippy --release`.
+- `cargo build --release`, `cargo test --release` (37 tests), `cargo clippy --release`.
   The sign-in helper (`login/`, `cargo build -p cosmic-authenticator-login`)
   needs WebKitGTK 6.0 development files, which this host lacks
   (`webkitgtk6.0-devel`); it builds in the Flatpak (GNOME 50 SDK). A native

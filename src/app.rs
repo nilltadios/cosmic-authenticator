@@ -22,7 +22,7 @@ use zeroize::Zeroizing;
 use crate::logos::{self, Logos};
 use crate::proton::api::USER_AGENT;
 use crate::proton::session::{self, Session};
-use crate::proton::sync::{self as proton_sync, Fetched, Links, SyncError};
+use crate::proton::sync::{self as proton_sync, Links, Outcome, Snapshot, SyncError};
 use crate::proton::fork;
 use crate::ring::Countdown;
 use crate::settings::{AppTheme, Settings};
@@ -90,9 +90,13 @@ pub struct AppModel {
     /// export password, if one was given.
     pending_export: Option<Option<Secret>>,
     session: Option<Session>,
-    /// Local entry id to Proton entry, for codes that came from Proton.
+    /// Local entry id to Proton entry, with what is waiting to be synced.
     links: Links,
     sync: SyncStatus,
+    /// Set when codes changed during a sync, so another one follows it.
+    sync_again: bool,
+    /// Set when sync was turned off during a sync; sign-out follows it.
+    sign_out_after_sync: bool,
     /// The `state` of the sign-in in progress, checked against the reply.
     sign_in_state: Option<String>,
     /// The key the vault is saved with: the keyring's, or the app lock's.
@@ -154,8 +158,9 @@ pub enum Message {
     LoginWindowClosed(Result<String, String>),
     SignedIn(Result<Session, SyncError>),
     SyncNow,
-    Synced(Box<(Session, Result<Fetched, SyncError>)>),
-    SignedOut,
+    Synced(Box<(Session, Snapshot, Result<Outcome, SyncError>)>),
+    Reordered(Box<(Session, Result<(), SyncError>)>),
+    SignedOut(Box<(Snapshot, Result<Outcome, SyncError>)>),
 
     LockInput(Secret),
     Unlock,
@@ -600,36 +605,59 @@ impl AppModel {
         self.core.window.show_context = false;
     }
 
-    /// Codes that came from Proton are read-only until two-way sync exists:
-    /// a local edit would never reach Proton and would be replaced on the next sync.
-    fn is_synced(&self, index: usize) -> bool {
-        self.entries.get(index).is_some_and(|entry| self.links.contains_key(&entry.id))
+    fn snapshot(&self) -> Snapshot {
+        Snapshot { entries: self.entries.clone(), links: self.links.clone() }
     }
 
+    /// Saves the vault, then the links. In that order a crash in between can
+    /// only bring a deleted code back, never lose one.
+    fn persist_with_links(&mut self) -> bool {
+        if !self.persist() {
+            return false;
+        }
+        match store::save_links(&self.links) {
+            Ok(()) => true,
+            Err(error) => {
+                self.error = Some(error);
+                false
+            }
+        }
+    }
+
+    /// Starts a sync, or asks for another once the running one is done.
     fn start_sync(&mut self) -> Task<cosmic::Action<Message>> {
         let Some(mut session) = self.session.clone() else {
             return Task::none();
         };
+        if self.sync == SyncStatus::Syncing {
+            self.sync_again = true;
+            return Task::none();
+        }
         self.sync = SyncStatus::Syncing;
+        self.sync_again = false;
+        let snapshot = self.snapshot();
         background(
             move || {
-                let result = proton_sync::fetch(&mut session);
-                (session, result)
+                let result = proton_sync::run(&mut session, snapshot.clone());
+                (session, snapshot, result)
             },
             |result| Message::Synced(Box::new(result)),
         )
     }
 
-    fn apply_sync(&mut self, session: Session, result: Result<Fetched, SyncError>) -> Task<cosmic::Action<Message>> {
-        // A refresh during the sync replaced the tokens; keep the new ones.
+    /// Keeps tokens that a refresh replaced during a request.
+    fn keep_tokens(&mut self, session: Session) {
         if self.session.as_ref().is_some_and(|current| current.tokens != session.tokens) {
             if let Err(error) = session::save(&session, self.lock_key().as_ref()) {
                 self.error = Some(error);
             }
             self.session = Some(session);
         }
-        let fetched = match result {
-            Ok(fetched) => fetched,
+    }
+
+    fn apply_sync(&mut self, snapshot: Snapshot, result: Result<Outcome, SyncError>) -> Task<cosmic::Action<Message>> {
+        let outcome = match result {
+            Ok(outcome) => outcome,
             Err(SyncError::SignedOut) => {
                 self.forget_session();
                 self.sync = SyncStatus::Error(SyncError::SignedOut.message());
@@ -641,37 +669,64 @@ impl AppModel {
             }
         };
 
-        let unreadable = fetched.unreadable;
+        let unreadable = outcome.unreadable;
+        let errors = outcome.errors.clone();
         let (previous_entries, previous_links) = (self.entries.clone(), self.links.clone());
-        let merged = proton_sync::merge(&mut self.entries, &mut self.links, fetched);
+        let merged = proton_sync::apply(&mut self.entries, &mut self.links, &snapshot, outcome);
         let saved = self.save_vault().and_then(|()| store::save_links(&self.links));
         if let Err(error) = saved {
-            // Keep memory in step with the files on disk.
+            // Keep memory in step with the files on disk. Proton has the
+            // uploads, and the next sync links them by content.
             (self.entries, self.links) = (previous_entries, previous_links);
             self.sync = SyncStatus::Error(error);
             return Task::none();
         }
         self.refresh_codes();
-        self.sync = SyncStatus::On;
+        self.sync = match errors.first() {
+            Some(error) => SyncStatus::Error(error.clone()),
+            None => SyncStatus::On,
+        };
 
         let mut parts = Vec::new();
-        if merged.added > 0 {
-            parts.push(format!("{} added", merged.added));
-        }
-        if merged.updated > 0 {
-            parts.push(format!("{} updated", merged.updated));
-        }
-        if merged.removed > 0 {
-            parts.push(format!("{} removed", merged.removed));
-        }
-        if unreadable > 0 {
-            parts.push(format!("{unreadable} could not be read"));
+        for (count, what) in [
+            (merged.added, "added"),
+            (merged.updated, "updated"),
+            (merged.removed, "removed"),
+            (merged.uploaded, "uploaded"),
+            (merged.deleted_remote, "deleted on Proton"),
+            (unreadable, "could not be read"),
+        ] {
+            if count > 0 {
+                parts.push(format!("{count} {what}"));
+            }
         }
         let mut tasks = vec![self.request_logos()];
         if !parts.is_empty() {
             tasks.push(self.toast(format!("Synced with Proton: {}", parts.join(", "))));
         }
+        if self.sync_again {
+            tasks.push(self.start_sync());
+        }
         Task::batch(tasks)
+    }
+
+    /// As the official logout: one last sync, so pending changes reach Proton,
+    /// then the session ends. Ending it on Proton is best effort.
+    fn sign_out(&mut self) -> Task<cosmic::Action<Message>> {
+        let Some(mut session) = self.session.clone() else {
+            self.sync = SyncStatus::Off;
+            return Task::none();
+        };
+        self.sync = SyncStatus::Syncing;
+        let snapshot = self.snapshot();
+        background(
+            move || {
+                let result = proton_sync::run(&mut session, snapshot.clone());
+                let _ = proton_sync::sign_out(&session);
+                (snapshot, result)
+            },
+            |result| Message::SignedOut(Box::new(result)),
+        )
     }
 
     /// Drops the session and the links; the codes themselves stay on this device.
@@ -737,7 +792,8 @@ impl AppModel {
             parts.push(format!("{} not supported", imported.failed));
         }
         let toast = self.toast(parts.join(", "));
-        Task::batch([toast, self.request_logos()])
+        let sync = if added > 0 { self.start_sync() } else { Task::none() };
+        Task::batch([toast, self.request_logos(), sync])
     }
 
     fn import(&mut self, contents: Vec<u8>, password: Option<Secret>) -> Task<cosmic::Action<Message>> {
@@ -843,11 +899,7 @@ impl AppModel {
             .class(card_class())
             .on_press(Message::Copy(index));
 
-        let editable = !self.is_synced(index);
-        let entry = |label, icon_name: &str, action| {
-            let icon = Some(icon::from_name(icon_name).into());
-            if editable { menu::Item::Button(label, icon, action) } else { menu::Item::ButtonDisabled(label, icon, action) }
-        };
+        let entry = |label, icon_name: &str, action| menu::Item::Button(label, Some(icon::from_name(icon_name).into()), action);
         let actions = vec![
             menu::Item::Button("Copy next code", Some(icon::from_name("edit-copy-symbolic").into()), CardAction::CopyNext(index)),
             entry("Edit", "document-edit-symbolic", CardAction::Edit(index)),
@@ -1044,11 +1096,8 @@ impl AppModel {
         );
         if self.session.is_some() {
             security = security.add(
-                settings::item::builder("Codes from Proton are read-only here")
-                    .description(
-                        "This version downloads your codes but does not upload changes yet. \
-                         Codes you add here stay on this device.",
-                    )
+                settings::item::builder("Sync now")
+                    .description("Codes also sync when the app starts and after each change.")
                     .control(widget::button::standard("Sync now").on_press_maybe((!busy).then_some(Message::SyncNow))),
             );
         } else if !busy {
@@ -1179,6 +1228,8 @@ impl cosmic::Application for AppModel {
             session: None,
             links: Links::new(),
             sync: SyncStatus::Off,
+            sync_again: false,
+            sign_out_after_sync: false,
             sign_in_state: None,
             vault_key: None,
             locked: lock_config.is_some().then(Locked::default),
@@ -1478,8 +1529,12 @@ impl cosmic::Application for AppModel {
                     Err(error) => form.error = Some(error),
                     Ok(entry) => {
                         let label = entry.issuer();
+                        let previous_links = self.links.clone();
                         match existing {
-                            Some(index) => self.entries[index] = entry,
+                            Some(index) => {
+                                proton_sync::mark_edited(&mut self.links, &entry.id);
+                                self.entries[index] = entry;
+                            }
                             None => {
                                 let uri = entry.uri();
                                 if self.entries.iter().any(|existing| existing.uri() == uri) {
@@ -1489,18 +1544,16 @@ impl cosmic::Application for AppModel {
                                 self.entries.push(entry);
                             }
                         }
-                        if self.persist() {
+                        if self.persist_with_links() {
                             self.close_drawer();
                             self.refresh_codes();
                             let verb = if existing.is_some() { "Saved" } else { "Added" };
                             let toast = self.toast(format!("{verb} the {label} code"));
-                            return Task::batch([toast, self.request_logos()]);
+                            return Task::batch([toast, self.request_logos(), self.start_sync()]);
                         }
+                        self.links = previous_links;
                     }
                 }
-            }
-            Message::Edit(index) | Message::RequestDelete(index) if self.is_synced(index) => {
-                return self.toast("Codes from Proton are read-only here until two-way sync is finished");
             }
             Message::Edit(index) => {
                 if let Some(entry) = self.entries.get(index) {
@@ -1518,16 +1571,20 @@ impl cosmic::Application for AppModel {
                     && let Some(index) = self.entries.iter().position(|entry| entry.id == id)
                 {
                     let removed = self.entries.remove(index);
-                    if self.persist() {
+                    let previous_links = self.links.clone();
+                    proton_sync::mark_deleted(&mut self.links, &id);
+                    if self.persist_with_links() {
                         if matches!(&self.drawer, Some(Drawer::Form(form)) if form.editing.as_ref() == Some(&id)) {
                             self.close_drawer();
                         }
                         self.refresh_codes();
                         let label = removed.issuer();
-                        return self.toast(format!("Deleted the {label} code"));
+                        let toast = self.toast(format!("Deleted the {label} code"));
+                        return Task::batch([toast, self.start_sync()]);
                     }
                     // Keep the list in step with the vault on disk.
                     self.entries.insert(index, removed);
+                    self.links = previous_links;
                 }
             }
             Message::Reorder(order) => {
@@ -1536,8 +1593,22 @@ impl cosmic::Application for AppModel {
                     self.entries = order.iter().map(|&index| previous[index].clone()).collect();
                     if !self.persist() {
                         self.entries = previous;
+                        self.refresh_codes();
+                        return Task::none();
                     }
                     self.refresh_codes();
+                    // As the official app: only the moved code's place goes to Proton.
+                    if let (Some(mut session), Some((remote_id, after))) =
+                        (self.session.clone(), proton_sync::moved(&previous, &order, &self.links))
+                    {
+                        return background(
+                            move || {
+                                let result = proton_sync::reorder(&mut session, &remote_id, after.as_deref());
+                                (session, result)
+                            },
+                            |result| Message::Reordered(Box::new(result)),
+                        );
+                    }
                 }
             }
 
@@ -1620,16 +1691,26 @@ impl cosmic::Application for AppModel {
                 }
             }
             Message::SyncToggle(false) => {
-                let Some(session) = self.session.clone() else {
-                    self.sync = SyncStatus::Off;
+                if self.sync == SyncStatus::Syncing {
+                    // Two syncs at once could upload the same new code twice.
+                    self.sign_out_after_sync = true;
                     return Task::none();
-                };
+                }
+                return self.sign_out();
+            }
+            Message::SignedOut(result) => {
+                let (snapshot, result) = *result;
+                if let Ok(outcome) = result {
+                    proton_sync::apply(&mut self.entries, &mut self.links, &snapshot, outcome);
+                    if self.persist() {
+                        self.refresh_codes();
+                    }
+                }
                 self.forget_session();
                 self.sync = SyncStatus::Off;
-                // Ending the session on Proton is best effort; the local copy is gone either way.
-                return background(move || proton_sync::sign_out(&session), |_| Message::SignedOut);
+                self.sync_again = false;
+                return Task::batch([self.toast("Sync disabled"), self.request_logos()]);
             }
-            Message::SignedOut => return self.toast("Sync disabled"),
 
             Message::AfterUnlock(messages) => self.after_unlock = messages,
             Message::LockInput(text) => {
@@ -1809,9 +1890,28 @@ impl cosmic::Application for AppModel {
                 }
             }
             Message::Synced(result) => {
+                let (session, snapshot, result) = *result;
+                if self.session.is_some() {
+                    self.keep_tokens(session);
+                    // The sign-out's own last sync replaces any follow-up sync.
+                    let signing_out = std::mem::take(&mut self.sign_out_after_sync);
+                    if signing_out {
+                        self.sync_again = false;
+                    }
+                    let applied = self.apply_sync(snapshot, result);
+                    if signing_out && self.session.is_some() {
+                        return Task::batch([applied, self.sign_out()]);
+                    }
+                    return applied;
+                }
+            }
+            Message::Reordered(result) => {
                 let (session, result) = *result;
                 if self.session.is_some() {
-                    return self.apply_sync(session, result);
+                    self.keep_tokens(session);
+                    if let Err(error) = result {
+                        return self.toast(format!("Code reordered but could not be synced: {}", error.message()));
+                    }
                 }
             }
             Message::ExportPath(Err(error)) => {

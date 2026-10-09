@@ -4,13 +4,18 @@
 //! password from the sign-in payload. Each Authenticator key from
 //! `authenticator/v1/key` is 32 bytes, encrypted to one account key and signed
 //! by it; the official app requires the signature (`expectSigned: true`).
+//! When the account has no Authenticator key, the official app makes one and
+//! uploads it the same way (`serializeKey` in `src/lib/entries/sync.ts`).
 
 use std::io::BufReader;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use pgp::composed::{Deserializable, Message, SignedPublicKey, SignedSecretKey};
-use pgp::types::Password;
+use aes_gcm::aead::OsRng;
+use pgp::composed::{Deserializable, Message, MessageBuilder, SignedPublicKey, SignedSecretKey};
+use pgp::crypto::hash::HashAlgorithm;
+use pgp::crypto::sym::SymmetricKeyAlgorithm;
+use pgp::types::{KeyDetails, Password};
 use serde_json::Value;
 
 pub struct UserKey {
@@ -79,6 +84,29 @@ pub fn decrypt_authenticator_key(key_b64: &str, user_key: &UserKey, key_password
     Ok(key)
 }
 
+/// Encrypts an Authenticator key to `user_key` and signs it with it, as the
+/// official app does before uploading a new key. Returns base64, as the API takes it.
+pub fn encrypt_authenticator_key(key: &[u8], user_key: &UserKey, key_password: &str) -> Result<String, String> {
+    let mut builder = MessageBuilder::from_bytes("", key.to_vec()).seipd_v1(OsRng, SymmetricKeyAlgorithm::AES256);
+    // The subkey made for encryption, as OpenPGP.js picks it; older RSA
+    // accounts may encrypt with the primary key.
+    let subkey = user_key.public.public_subkeys.iter().find(|subkey| {
+        subkey.key.algorithm().can_encrypt()
+            && subkey.signatures.iter().any(|sig| sig.key_flags().encrypt_comms() || sig.key_flags().encrypt_storage())
+    });
+    match subkey {
+        Some(subkey) => builder.encrypt_to_key(OsRng, subkey),
+        None if user_key.public.primary_key.algorithm().can_encrypt() => {
+            builder.encrypt_to_key(OsRng, &user_key.public.primary_key)
+        }
+        None => return Err(String::from("The account key has no encryption key")),
+    }
+    .map_err(|e| format!("Cannot encrypt the Authenticator key: {e}"))?;
+    builder.sign(&user_key.secret.primary_key, Password::from(key_password), HashAlgorithm::Sha512);
+    let message = builder.to_vec(OsRng).map_err(|e| format!("Cannot encrypt the Authenticator key: {e}"))?;
+    Ok(STANDARD.encode(message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +135,14 @@ mod tests {
         let keys = user(true).unwrap();
         let key = decrypt_authenticator_key(&STANDARD.encode(KEY_PGP), &keys[0], PASSWORD).unwrap();
         assert_eq!(key, KEY_BIN);
+    }
+
+    #[test]
+    fn a_new_key_reads_back_as_proton_would_read_it() {
+        let keys = user(true).unwrap();
+        let new_key = [7u8; 32];
+        let encrypted = encrypt_authenticator_key(&new_key, &keys[0], PASSWORD).unwrap();
+        assert_eq!(decrypt_authenticator_key(&encrypted, &keys[0], PASSWORD).unwrap(), new_key);
     }
 
     #[test]
