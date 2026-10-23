@@ -161,10 +161,10 @@ Both:
 - `cargo build --release`, `cargo test --release` (38 tests, 3 more ignored ones run by `demo/sync-test.sh`), `cargo clippy --release`.
   The sign-in helper (`login/`, `cargo build -p cosmic-authenticator-login`)
   needs WebKitGTK 6.0 development files, which this host lacks
-  (`webkitgtk6.0-devel`); it builds in the Flatpak (GNOME 50 SDK). A native
+  (`webkitgtk6.0-devel`); it builds in the Flatpak (GNOME 51 SDK). A native
   build without it shows an error when signing in. To check the helper alone
   (about a minute, instead of a full Flatpak build):
-  `systemd-run --user --scope -p MemoryMax=4G flatpak run --filesystem="$PWD" --filesystem=home/.cargo --command=sh org.gnome.Sdk//50 -c 'export PATH=/usr/lib/sdk/rust-stable/bin:$PATH; cargo --offline test --release -j 4 -p cosmic-authenticator-login --target-dir target/sdk'`.
+  `systemd-run --user --scope -p MemoryMax=4G flatpak run --filesystem="$PWD" --filesystem=home/.cargo --command=sh org.gnome.Sdk//51 -c 'export PATH=/usr/lib/sdk/rust-stable/bin:$PATH; cargo --offline test --release -j 4 -p cosmic-authenticator-login --target-dir target/sdk'`.
   `login/Cargo.toml` turns on gtk4's `v4_10` because webkit6 0.6.1 needs it
   but does not ask for it.
 - Sync end to end: `demo/sync-test.sh [screenshot dir]` starts
@@ -229,3 +229,5 @@ Both:
   outdated versions with error 5003; the app shows "sync is paused" for it.
 - Update the Proton core or libcosmic (`cargo update -p …`) in their own
   commits, not mixed with sync changes, so a regression points at one cause.
+  If an update breaks the build or the app, fix our code for the new API; do
+  not revert the update or pin back (the user, 2026-10-02).
