@@ -52,7 +52,9 @@ CARGO_BUILD_JOBS="${BUILD_JOBS:-6}" systemd-run --user --scope --quiet \
 # Git may have no identity set on this machine; use the project's author then.
 identity=()
 if ! git config user.name >/dev/null; then
-    author="$(git log --reverse --format='%an%x09%ae' | head -1)"
+    # Not `git log --reverse | head -1`: head closes the pipe early, git dies of
+    # SIGPIPE, and pipefail stops the release after the build (2026-10-23).
+    author="$(git log -1 --format='%an%x09%ae' "$(git rev-list --max-parents=0 HEAD)")"
     identity=(-c "user.name=${author%%$'\t'*}" -c "user.email=${author##*$'\t'}")
 fi
 git "${identity[@]}" commit --quiet -am "Release $version"
