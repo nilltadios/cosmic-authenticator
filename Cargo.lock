@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "cosmic-authenticator"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes-gcm 0.10.3",
  "argon2 0.5.3",
@@ -1283,7 +1283,7 @@ dependencies = [
 
 [[package]]
 name = "cosmic-authenticator-login"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gtk4",
  "webkit6",
