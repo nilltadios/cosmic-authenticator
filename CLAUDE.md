@@ -144,9 +144,17 @@ Both:
   `com.system76.CosmicTheme.*` folders; the user's accent is red). Never test
   with `XDG_CONFIG_HOME` pointed elsewhere unless `cosmic` is linked in, or the
   app shows default teal, which looks like a theming bug.
-- Local git repository since 2026-09-25 (first commit that day), no remote.
-  "Commit" means a local commit; push only when asked. The user's Gitea
-  (git.nillsite.com) is retired; do not offer it as a remote.
+- Git repository since 2026-09-25; on GitHub as nilltadios/cosmic-authenticator
+  (public, `origin`, HTTPS) since 2026-11-03. "Commit" means a local commit;
+  push only when asked. Every push to main runs .github/workflows/flatpak.yml,
+  which builds, signs and publishes the Flatpak repo on GitHub Pages
+  (https://nilltadios.github.io/cosmic-authenticator/, branch `stable`, remote
+  name `cosmic-authenticator`); "[skip ci]" in a message pushes without a
+  release. The signing key (fingerprint 8402 3450 4490 3206 B410 E737 EFC3
+  7D07 A14D A863) is the GPG_PRIVATE_KEY Actions secret; its only other copy is
+  GNUPGHOME=~/.local/share/cosmic-authenticator-flatpak/gnupg. Keep the same
+  key: a new one breaks updates for everyone who added the remote. The user's
+  Gitea (git.nillsite.com) is retired; do not offer it as a remote.
 
 ## Building and testing
 

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<meta name="description" content="COSMIC Authenticator: two-factor codes in a native COSMIC app, built on Proton Authenticator's open-source core, with Proton sign-in and sync. Not an official Proton app. Signed builds that update through COSMIC Store, Discover, GNOME Software and flatpak update.">
+<title>COSMIC Authenticator</title>
+<link rel="icon" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;900&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --red: #ff0000;
+    --red-hot: #ff3b3b;
+    --red-deep: #4d0000;
+    --blue: #3d7bff;
+    --black: #000;
+    --ink: #0b0b0b;
+    --panel: #121212;
+    --line: #2a2a2a;
+    --text: #f3f3f3;
+    --muted: #b4b4b4;
+    --display: "Big Shoulders Display", "Arial Narrow", sans-serif;
+    --body: "Atkinson Hyperlegible", "Segoe UI", sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--black); }
+  body {
+    margin: 0;
+    color: var(--text);
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.022) 0 1px, transparent 1px 48px),
+      radial-gradient(110% 70% at 90% -10%, rgba(255,0,0,.22), transparent 60%),
+      var(--black);
+    font: 17px/1.65 var(--body);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--red-hot); text-underline-offset: 3px; }
+  a:hover { color: #fff; }
+  :focus-visible { outline: 3px solid var(--red); outline-offset: 3px; }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 0 16px; }
+
+  /* ---------- hero ---------- */
+  header { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
+  .hero { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 24px 40px; padding-top: 56px; padding-bottom: 52px; }
+  .tag {
+    display: inline-flex; align-items: center; gap: .6rem;
+    font: 600 .78rem/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+  }
+  .shelf { display: inline-grid; grid-template-columns: repeat(3, 6px); gap: 2px; }
+  .shelf i { height: 6px; background: var(--red); animation: stock 2.4s ease-in-out infinite; }
+  .shelf i:nth-child(2n) { background: var(--blue); animation-delay: .3s; }
+  .shelf i:nth-child(3n) { animation-delay: .6s; }
+  @keyframes stock { 50% { opacity: .3; } }
+  h1 {
+    margin: .3rem 0 0; font: 900 clamp(3.6rem, 13vw, 8.2rem)/.84 var(--display);
+    letter-spacing: .01em; text-transform: uppercase; text-shadow: 6px 6px 0 var(--black);
+  }
+  h1 span { display: block; color: var(--red); }
+  .lede { max-width: 34rem; margin: 1.2rem 0 1.6rem; font-size: 1.15rem; }
+  .lede b { color: #fff; }
+  .version { display: inline-block; padding: .1rem .5rem; font: 600 .95rem var(--mono); color: var(--black); background: var(--text); }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: .6rem;
+    padding: .9rem 1.3rem; font: 700 1.05rem/1 var(--body); text-decoration: none;
+    border: 2px solid var(--red); transition: transform .15s, background .15s, color .15s;
+  }
+  .btn.primary { background: var(--red); color: var(--black); box-shadow: 5px 5px 0 var(--text); }
+  .btn.primary:hover { background: var(--red-hot); color: var(--black); transform: translate(-2px,-2px); box-shadow: 7px 7px 0 var(--text); }
+  .btn.ghost { background: var(--black); color: var(--text); }
+  .btn.ghost:hover { background: var(--red-deep); color: #fff; }
+  .hint { margin: 1rem 0 0; max-width: 34rem; font-size: .92rem; color: var(--muted); }
+  .badge { width: clamp(150px, 22vw, 230px); aspect-ratio: 1; filter: drop-shadow(10px 10px 0 var(--red-deep)); }
+  .badge img { width: 100%; height: 100%; display: block; }
+
+  /* ---------- feature strip ---------- */
+  .features { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1px; margin: 40px 0 8px; background: var(--line); border: 1px solid var(--line); }
+  .feature { background: var(--ink); padding: 1rem 1rem 1.1rem; }
+  .feature h3 { margin: 0 0 .35rem; font: 700 1.25rem/1.1 var(--display); letter-spacing: .03em; text-transform: uppercase; color: #fff; }
+  .feature h3::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: .5rem; background: var(--red); vertical-align: .1em; }
+  .feature:nth-child(2n) h3::before { background: var(--blue); }
+  .feature p { margin: 0; font-size: .92rem; color: var(--muted); }
+
+  /* ---------- sections ---------- */
+  main { padding: 16px 0 8px; }
+  section { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: 0 1.5rem; padding: 36px 0; border-bottom: 1px solid var(--line); }
+  .num { font: 900 3.6rem/1 var(--display); color: var(--red); }
+  h2 { margin: 0 0 .5rem; font: 700 2rem/1.1 var(--display); letter-spacing: .02em; text-transform: uppercase; }
+  section p { margin: .5rem 0; max-width: 44rem; }
+  .muted { color: var(--muted); }
+  code { font: .92em var(--mono); color: #fff; background: var(--panel); padding: .08em .35em; border: 1px solid var(--line); overflow-wrap: anywhere; }
+
+  .cmd { position: relative; margin: .8rem 0; background: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--red); }
+  .cmd pre { margin: 0; padding: .95rem 6.2rem .95rem 1rem; white-space: pre-wrap; overflow-wrap: anywhere; font: .9rem/1.55 var(--mono); color: #fff; }
+  .cmd pre::before { content: "$ "; color: var(--red); user-select: none; }
+  .cmd.out pre::before { content: ""; }
+  .cmd.out { border-left-color: var(--blue); }
+  .copy {
+    position: absolute; top: .55rem; right: .55rem; padding: .35rem .7rem;
+    font: 600 .78rem var(--mono); text-transform: uppercase; letter-spacing: .08em;
+    color: var(--text); background: var(--panel); border: 1px solid var(--line); cursor: pointer;
+  }
+  .copy:hover { border-color: var(--red); color: #fff; }
+  .copy.done { background: var(--red); color: var(--black); border-color: var(--red); }
+
+  .note { margin-top: 1rem; padding: .8rem 1rem; background: var(--panel); border: 1px solid var(--line); font-size: .95rem; }
+  .note b { color: var(--red-hot); }
+  .fingerprint { display: inline-block; margin: .3rem 0; padding: .55rem .8rem; font: 600 1.02rem var(--mono); letter-spacing: .04em; color: #fff; background: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--blue); overflow-wrap: anywhere; }
+
+  table { width: 100%; max-width: 44rem; border-collapse: collapse; margin-top: .6rem; }
+  th, td { text-align: left; padding: .65rem .2rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { width: 34%; font-weight: 700; color: #fff; }
+
+  /* ---------- build facts ---------- */
+  .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin: 36px 0; }
+  .fact { background: var(--ink); padding: 1rem; }
+  .fact dt { font: 600 .72rem var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  .fact dd { margin: .3rem 0 0; font: 600 1rem var(--mono); color: #fff; overflow-wrap: anywhere; }
+  .fact.hot dd { color: var(--red-hot); }
+
+  footer { padding: 8px 0 48px; font-size: .92rem; color: var(--muted); }
+  footer a { color: var(--text); }
+
+  /* slide only, never fade: text stays readable even if animations never run */
+  .rise { animation: rise .6s cubic-bezier(.2,.7,.2,1) backwards; }
+  .d1 { animation-delay: .05s; } .d2 { animation-delay: .15s; } .d3 { animation-delay: .25s; } .d4 { animation-delay: .35s; }
+  @keyframes rise { from { transform: translateY(18px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .rise, .shelf i { animation: none; }
+    .btn { transition: none; }
+  }
+
+  @media (max-width: 860px) {
+    .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 640px) {
+    .hero { grid-template-columns: minmax(0, 1fr); padding-top: 36px; }
+    .badge { order: -1; width: 112px; }
+    section { grid-template-columns: minmax(0, 1fr); }
+    .num { font-size: 2.6rem; margin-bottom: .3rem; }
+    .features, .facts { grid-template-columns: minmax(0, 1fr); }
+    .cmd pre { padding-right: 1rem; padding-top: 2.6rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap hero">
+    <div>
+      <div class="tag rise d1"><span class="shelf" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span> Signed Flatpak for COSMIC &middot; not an official Proton app</div>
+      <h1 class="rise d2">COSMIC <span>Authenticator</span></h1>
+      <p class="lede rise d3">Your <b>two-factor codes</b> in a native COSMIC app, on Proton Authenticator's open-source Rust core, with Proton sign-in and sync. Updates arrive through COSMIC Store, Discover, GNOME Software and <code>flatpak update</code>. Current build <span class="version">@VERSION@</span></p>
+      <div class="actions rise d4">
+        <a class="btn primary" href="@APP@.flatpakref">Install COSMIC Authenticator &rarr;</a>
+        <a class="btn ghost" href="@REPO_FILE@">Add the repo only</a>
+      </div>
+      <p class="hint rise d4"><b>Install</b> downloads a small file. Open it and COSMIC Store, Discover or GNOME Software takes it from there.</p>
+    </div>
+    <div class="badge rise d2"><img src="icon.svg" alt="COSMIC Authenticator icon: a black shield with a red countdown ring on red"></div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="features" aria-label="What it does">
+    <div class="feature"><h3>Codes</h3><p>TOTP and Steam codes with a countdown and the next code ahead.</p></div>
+    <div class="feature"><h3>Proton sync</h3><p>Sign in with a Proton account to get your codes from it. One-way for now.</p></div>
+    <div class="feature"><h3>App lock</h3><p>An optional password encrypts the vault with Argon2id and AES-GCM.</p></div>
+    <div class="feature"><h3>Import</h3><p>From Proton, Aegis, 2FAS, Bitwarden, Ente, LastPass and Google export QR codes.</p></div>
+    <div class="feature"><h3>Light</h3><p>Native libcosmic UI instead of a web view, so idle means idle.</p></div>
+  </div>
+
+  <section>
+    <div class="num">01</div>
+    <div>
+      <h2>Install from a terminal</h2>
+      <p>Add the repo, then install. Both commands are per-user. Nothing needs root.</p>
+      <div class="cmd"><pre>flatpak remote-add --user --if-not-exists @REMOTE@ @BASE@@REPO_FILE@</pre><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><pre>flatpak install --user @REMOTE@ @APP@</pre><button class="copy" type="button">Copy</button></div>
+      <p class="muted">The runtime (@RUNTIME@) comes from Flathub. If you have never added Flathub, add it first:</p>
+      <div class="cmd"><pre>flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo</pre><button class="copy" type="button">Copy</button></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="num">02</div>
+    <div>
+      <h2>Installed from a downloaded file?</h2>
+      <p>A copy installed from a <code>.flatpak</code> file never updates. Add the repo (first command above), then switch the installed app over. Only the app files are replaced. Your codes and settings in <code>~/.var/app/@APP@</code> and the keyring stay.</p>
+      <div class="cmd"><pre>flatpak install --user --reinstall @REMOTE@ @APP@</pre><button class="copy" type="button">Copy</button></div>
+      <div class="note"><b>System-wide install?</b> The repo and the app must be in the same installation. If COSMIC Authenticator is installed system-wide, replace <code>--user</code> with <code>--system</code> in every command.</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="num">03</div>
+    <div>
+      <h2>Check it worked</h2>
+      <p>The second column must say <code>@REMOTE@</code>. Anything else means updates will not reach you; run step 02.</p>
+      <div class="cmd"><pre>flatpak list --app --columns=application,origin,version | grep -i cosmicauthenticator</pre><button class="copy" type="button">Copy</button></div>
+      <div class="cmd out"><pre>@APP@   @REMOTE@   @VERSION@</pre></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="num">04</div>
+    <div>
+      <h2>Updates</h2>
+      <p>Every change to the source on GitHub builds and signs a new version. You update the usual way:</p>
+      <table>
+        <tr><th>Terminal</th><td><code>flatpak update</code></td></tr>
+        <tr><th>COSMIC Store</th><td><b>Updates</b> in the sidebar</td></tr>
+        <tr><th>KDE Discover</th><td><b>Updates</b>. Click <b>Refresh</b> if nothing is listed yet</td></tr>
+        <tr><th>GNOME Software</th><td>The <b>Updates</b> tab. Refresh if needed</td></tr>
+        <tr><th>Automatic updates</th><td>The store's auto-update setting covers this app too</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="num">05</div>
+    <div>
+      <h2>Check the signing key</h2>
+      <p>Flatpak refuses anything not signed by this key. Its fingerprint is also in the <a href="@REPO_URL@#install">project README</a>:</p>
+      <div class="fingerprint">@FINGERPRINT@</div>
+      <p class="muted">Compare it with the key in the repo file this site serves:</p>
+      <div class="cmd"><pre>curl -s @BASE@@REPO_FILE@ | sed -n 's/^GPGKey=//p' | base64 -d | gpg --show-keys</pre><button class="copy" type="button">Copy</button></div>
+      <p class="muted">Network access is for Proton sync and service logos; the vault key lives in your Secret Service keyring. <a href="@REPO_URL@#flatpak">Details in the README</a>.</p>
+    </div>
+  </section>
+
+
+  <section>
+    <div class="num">06</div>
+    <div>
+      <h2>Remove</h2>
+      <p>Leave out <code>--delete-data</code> to keep your codes. Export a backup from the app first if you are not sure.</p>
+      <div class="cmd"><pre>flatpak uninstall --user @APP@</pre><button class="copy" type="button">Copy</button></div>
+      <div class="cmd"><pre>flatpak remote-delete --user @REMOTE@</pre><button class="copy" type="button">Copy</button></div>
+    </div>
+  </section>
+
+  <dl class="facts" aria-label="Current build">
+    <div class="fact hot"><dt>Version</dt><dd>@VERSION@</dd></div>
+    <div class="fact"><dt>Runtime</dt><dd>@RUNTIME@</dd></div>
+    <div class="fact"><dt>Published</dt><dd>@PUBLISHED@</dd></div>
+    <div class="fact"><dt>Source</dt><dd><a href="@REPO_URL@/commit/@COMMIT@">@COMMIT_SHORT@</a></dd></div>
+    <div class="fact"><dt>Build commit</dt><dd>@OSTREE_SHORT@&hellip;</dd></div>
+    <div class="fact"><dt>Architecture</dt><dd>x86_64</dd></div>
+  </dl>
+</main>
+
+<footer class="wrap">
+  Built and signed by GitHub Actions from <a href="@REPO_URL@">@REPO_NAME@</a>. Machine-readable build info: <a href="state.json">state.json</a>.
+  GPL-3.0-only. Built on <a href="https://github.com/protonpass/proton-pass-common">Proton's open-source authenticator core</a>. Not an official Proton app, and not endorsed by Proton AG.
+</footer>
+
+<script>
+  document.querySelectorAll(".copy").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var text = btn.previousElementSibling.textContent;
+      var done = function () {
+        btn.textContent = "Copied"; btn.classList.add("done");
+        setTimeout(function () { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1400);
+      };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+    });
+  });
+</script>
+</body>
+</html>

@@ -7,6 +7,34 @@ that core.
 
 Not an official Proton app.
 
+## Install
+
+**One click:** open [the install file](https://nilltadios.github.io/cosmic-authenticator/dev.nilltadios.CosmicAuthenticator.flatpakref) in COSMIC Store, Discover or GNOME Software.
+
+**Terminal:**
+
+```sh
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak remote-add --user --if-not-exists cosmic-authenticator https://nilltadios.github.io/cosmic-authenticator/cosmic-authenticator.flatpakrepo
+flatpak install --user cosmic-authenticator dev.nilltadios.CosmicAuthenticator
+```
+
+Updates arrive through `flatpak update`, COSMIC Store, Discover or GNOME Software like any other app. Every push to `main` builds, signs and publishes a new version ([workflow](.github/workflows/flatpak.yml)).
+
+**Installed it from a downloaded `.flatpak` file?** That copy never updates. Add the remote (second command above), then switch to it. Your codes and settings are kept:
+
+```sh
+flatpak install --user --reinstall cosmic-authenticator dev.nilltadios.CosmicAuthenticator
+```
+
+Use `--system` instead of `--user` in every command if you installed it system-wide.
+
+**Signing key fingerprint:** `8402 3450 4490 3206 B410  E737 EFC3 7D07 A14D A863`. To compare it with the key the site serves:
+
+```sh
+curl -s https://nilltadios.github.io/cosmic-authenticator/cosmic-authenticator.flatpakrepo | sed -n 's/^GPGKey=//p' | base64 -d | gpg --show-keys
+```
+
 ## Goal
 
 The official Proton Authenticator desktop app, with every feature kept, but a
@@ -36,9 +64,9 @@ flatpak run dev.nilltadios.CosmicAuthenticator
 flatpak uninstall --user dev.nilltadios.CosmicAuthenticator   # to remove it
 ```
 
-`build.sh` vendors the crates (the one step that downloads, pinned by
-`Cargo.lock`), then builds offline with `flatpak-builder` on
-the GNOME 50 runtime (for the sign-in window's WebKit) and exports a single-file bundle. The app runs as
+`build.sh` vendors the crates (pinned by `Cargo.lock`), then builds offline
+with `flatpak-builder` on the GNOME 51 runtime (for the sign-in window's WebKit),
+with the official Rust release pinned in `rust-toolchain.toml`, and exports a single-file bundle. The app runs as
 a native Wayland client, with X11 only as a fallback where there is no Wayland.
 Its sandbox allows network (logos), the Secret Service keyring (the vault key),
 read-only `~/.config/cosmic` (the theme) and files only through the file chooser.
