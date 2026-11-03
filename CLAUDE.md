@@ -122,7 +122,7 @@ before following a machine-specific note.
 - `flatpak-builder` exists only as the Flathub app `org.flatpak.Builder`;
   `flatpak/build.sh` falls back to it.
 - Git has no name or email set. Commit with `git -c user.name=… -c user.email=…`,
-  using the author of the first commit (`git log --format='%an <%ae>' f3656e0`).
+  using the author of the first commit (`git log --reverse --format='%an <%ae>' | head -1`).
 - `gio trash` works.
 - Screenshots: `cosmic-screenshot --interactive=false --modal=false --notify=false -s <dir>`
   captures both screens side by side (logical size, eDP-1 first). Crop with
