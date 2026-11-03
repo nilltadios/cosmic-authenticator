@@ -6,8 +6,6 @@ id: dev.nilltadios.CosmicAuthenticator
 runtime: org.gnome.Platform
 runtime-version: '51'
 sdk: org.gnome.Sdk
-sdk-extensions:
-  - org.freedesktop.Sdk.Extension.rust-stable
 command: cosmic-authenticator
 
 finish-args:
@@ -23,14 +21,35 @@ finish-args:
   - --filesystem=xdg-config/cosmic:ro
   # Imports and exports go through the file chooser portal, so no file access is needed.
 
+# Rust is a build tool, removed before export.
+cleanup:
+  - /lib/rust
+
 modules:
+  # The official Rust release pinned in rust-toolchain.toml, not the SDK's
+  # rust-stable extension, whose 26.08 branch (GNOME 51's base) is still 1.98.0.
+  # To update: change the version here and in rust-toolchain.toml, and take the
+  # sha256 from the .sha256 file next to the archive on static.rust-lang.org.
+  - name: rust-toolchain
+    buildsystem: simple
+    build-options:
+      no-debuginfo: true
+      strip: false
+    build-commands:
+      - ./install.sh --prefix=/app/lib/rust --components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu --disable-ldconfig
+    sources:
+      - type: archive
+        url: https://static.rust-lang.org/dist/rust-1.99.1-x86_64-unknown-linux-gnu.tar.xz
+        sha256: 231fcae47ee950621374725b5fc3b5441d2fbda2955ac45dd7dc816d8876cfe7
+
   - name: cosmic-authenticator
     buildsystem: simple
     build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin
+      prepend-path: /app/lib/rust/bin
       env:
         CARGO_HOME: /run/build/cosmic-authenticator/cargo
     build-commands:
+      - rustc --version && cargo --version
       - mkdir -p .cargo && cp flatpak/cargo-config.toml .cargo/config.toml
       # Cargo does not follow flatpak-builder's --jobs by itself; pass it on.
       - cargo --offline build --release --locked -j "${FLATPAK_BUILDER_N_JOBS:-4}" -p cosmic-authenticator -p cosmic-authenticator-login

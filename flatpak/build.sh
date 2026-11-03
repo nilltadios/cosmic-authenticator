@@ -4,10 +4,10 @@
 #   flatpak/build.sh
 #   flatpak install --user flatpak/dev.nilltadios.CosmicAuthenticator.flatpak
 #
-# Needs flatpak-builder (or the org.flatpak.Builder app), org.gnome.Sdk 51,
-# and the org.freedesktop.Sdk rust-stable extension for 26.08 (the base of
-# GNOME 51). Crates are vendored into flatpak/vendor first (the one step that
-# downloads), pinned by Cargo.lock, because the build sandbox has no network.
+# Needs flatpak-builder (or the org.flatpak.Builder app) and org.gnome.Sdk 51.
+# The manifest downloads the official Rust release pinned in rust-toolchain.toml.
+# Crates are vendored into flatpak/vendor first, pinned by Cargo.lock, because
+# the build sandbox has no network (flatpak-builder fetches the Rust archive).
 set -euo pipefail
 
 app_id="dev.nilltadios.CosmicAuthenticator"

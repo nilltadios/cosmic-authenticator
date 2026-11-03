@@ -164,7 +164,8 @@ Both:
   (`webkitgtk6.0-devel`); it builds in the Flatpak (GNOME 51 SDK). A native
   build without it shows an error when signing in. To check the helper alone
   (about a minute, instead of a full Flatpak build):
-  `systemd-run --user --scope -p MemoryMax=4G flatpak run --filesystem="$PWD" --filesystem=home/.cargo --command=sh org.gnome.Sdk//51 -c 'export PATH=/usr/lib/sdk/rust-stable/bin:$PATH; cargo --offline test --release -j 4 -p cosmic-authenticator-login --target-dir target/sdk'`.
+  `systemd-run --user --scope -p MemoryMax=4G flatpak run --filesystem="$PWD" --filesystem=home/.cargo --filesystem=home/.rustup:ro --command=sh org.gnome.Sdk//51 -c 'export PATH=$HOME/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:$PATH; cargo --offline test --release -j 4 -p cosmic-authenticator-login --target-dir target/sdk'`
+  (rustup's 1.99.1, the same official release the Flatpak downloads; `rustup toolchain install 1.99.1` if missing).
   `login/Cargo.toml` turns on gtk4's `v4_10` because webkit6 0.6.1 needs it
   but does not ask for it.
 - Sync end to end: `demo/sync-test.sh [screenshot dir]` starts

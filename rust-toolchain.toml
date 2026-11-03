@@ -1,0 +1,5 @@
+# Same Rust as the Flatpak build (flatpak/dev.nilltadios.CosmicAuthenticator.yml).
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
