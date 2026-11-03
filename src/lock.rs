@@ -5,9 +5,10 @@
 //! verifier) tells whether a password is right. After `MAX_FAILURES` wrong
 //! passwords in a row the local data is erased, as the official app does.
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload, rand_core::RngCore};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
+use rand_core::{OsRng, RngCore};
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -109,7 +110,7 @@ pub fn seal(key: &Key, aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
     let mut iv = [0u8; IV_LENGTH];
     OsRng.fill_bytes(&mut iv);
     let ciphertext = Aes256Gcm::new(key.as_bytes().into())
-        .encrypt(Nonce::from_slice(&iv), Payload { msg: plaintext, aad })
+        .encrypt(&Nonce::from(iv), Payload { msg: plaintext, aad })
         .expect("AES-GCM encryption does not fail for in-memory data");
     [iv.as_slice(), &ciphertext].concat()
 }
@@ -119,7 +120,8 @@ pub fn open(key: &Key, aad: &[u8], sealed: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let (iv, ciphertext) = sealed.split_at(IV_LENGTH);
-    Aes256Gcm::new(key.as_bytes().into()).decrypt(Nonce::from_slice(iv), Payload { msg: ciphertext, aad }).ok()
+    let iv = Nonce::try_from(iv).ok()?;
+    Aes256Gcm::new(key.as_bytes().into()).decrypt(&iv, Payload { msg: ciphertext, aad }).ok()
 }
 
 /// Sets up a new password: its key, and the config to store. Slow (Argon2).
@@ -189,5 +191,19 @@ mod tests {
         assert_eq!(config.attempts_left(), 10);
         config.failed_attempts = 9;
         assert_eq!(config.attempts_left(), 1);
+    }
+
+    /// A lock set up by an earlier build (aes-gcm 0.10, argon2 0.5): crate
+    /// upgrades must still open existing locks and derive the same key.
+    #[test]
+    fn opens_a_lock_made_by_an_earlier_build() {
+        let config: LockConfig = serde_json::from_str(
+            r#"{"salt":"YocW6XoDInVVqcnbiNKDrxEwzUJj1lVFkMZagNb2DmE=","params":{"passes":1,"parallelism":1,"memory_exponent":8},"verifier":"SF63/gp6vYwOECJFwnE4/OVBVAu0cjE2HF3IpKdvOrv3s4jADGrohExPFoL2gVG5AfkAvpehFKVbNebb","failed_attempts":0}"#,
+        )
+        .unwrap();
+        let key = verify(&config, "correct horse").unwrap().expect("the lock opens");
+        let hex: String = key.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, "bd0e1fa42070714f1eebf275d57a187ad9624aaa61935f6a1ccf1473d650d498");
+        assert_eq!(verify(&config, "wrong horse").unwrap(), None);
     }
 }

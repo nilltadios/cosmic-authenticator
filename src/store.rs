@@ -3,7 +3,7 @@
 //! Entries are encrypted one by one with Proton's `encrypt_entries` (AES-GCM)
 //! and written as a JSON array of Base64 strings. The 32-byte key comes from
 //! the Secret Service keyring, stored as Base64 text (KDE's implementation
-//! rejects binary secrets labelled as text, which is how `keyring` 3.x stores
+//! rejects binary secrets labelled as text, which is how `keyring` 3.x stored
 //! raw bytes), or, with the app lock on, from the password (see lock.rs).
 
 use std::fs;

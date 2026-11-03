@@ -4,11 +4,12 @@
 //! the payload holding the key password.
 
 use aes_gcm::aead::consts::U16;
-use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload, rand_core::RngCore};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::aes::Aes256;
 use aes_gcm::{Aes256Gcm, AesGcm, Nonce};
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
@@ -93,9 +94,9 @@ pub fn decrypt_payload(key: &[u8; 32], payload: &str, version: u8) -> Result<For
     let message = Payload { msg: ciphertext, aad };
 
     let plaintext: Zeroizing<Vec<u8>> = Zeroizing::new(if version == 3 {
-        Aes256Gcm::new(key.into()).decrypt(Nonce::from_slice(iv), message)
+        Aes256Gcm::new(key.into()).decrypt(&Nonce::try_from(iv).expect("12-byte IV"), message)
     } else {
-        Aes256Gcm16::new(key.into()).decrypt(aes_gcm::Nonce::<U16>::from_slice(iv), message)
+        Aes256Gcm16::new(key.into()).decrypt(&aes_gcm::Nonce::<U16>::try_from(iv).expect("16-byte IV"), message)
     }
     .map_err(|_| "Cannot decrypt the sign-in payload")?);
 
@@ -118,10 +119,10 @@ mod tests {
         let payload = Payload { msg: json.as_bytes(), aad };
         let (iv, ciphertext) = if version == 3 {
             let iv = [7u8; 12];
-            (iv.to_vec(), Aes256Gcm::new(key.into()).encrypt(Nonce::from_slice(&iv), payload).unwrap())
+            (iv.to_vec(), Aes256Gcm::new(key.into()).encrypt(&Nonce::from(iv), payload).unwrap())
         } else {
             let iv = [7u8; 16];
-            (iv.to_vec(), Aes256Gcm16::new(key.into()).encrypt(aes_gcm::Nonce::<U16>::from_slice(&iv), payload).unwrap())
+            (iv.to_vec(), Aes256Gcm16::new(key.into()).encrypt(&aes_gcm::Nonce::<U16>::from(iv), payload).unwrap())
         };
         STANDARD.encode([iv, ciphertext].concat())
     }
@@ -160,5 +161,20 @@ mod tests {
         assert!(parse_callback("state=abc", "abc").is_err());
         let no_version = format!("selector=s&state=abc&sk={key}");
         assert_eq!(parse_callback(&no_version, "abc").unwrap().payload_version, 1);
+    }
+
+    /// Payloads encrypted by an earlier build (aes-gcm 0.10): crate upgrades
+    /// must still decrypt every version.
+    #[test]
+    fn decrypts_payloads_made_by_an_earlier_build() {
+        let payloads = [
+            "BwcHBwcHBwcHBwcHBwcHB3pH6/UFmZvKhD09fSsootUIXHsfa6FDgN4mI74HO9aSWOgUoj817KVaGKhRbS2V7XfslU6+w/JhVhfvobFYlC5cWUQHcV29ORh3dEBLLJymvCqdAwvBc0GNZTuhRm53zcGG/siQ9/yn7cPbsA==",
+            "BwcHBwcHBwcHBwcHBwcHB3pH6/UFmZvKhD09fSsootUIXHsfa6FDgN4mI74HO9aSWOgUoj817KVaGKhRbS2V7XfslU6+w/JhVhfvobFYlC5cWUQHcV29ORh3dEBLLJymvCqdAwvBc0GNZTuh6KdNdAaPopGroB9BvrS7mg==",
+            "BwcHBwcHBwcHBwcHRN2L3CXxBwvbJRbG5pXZXhiqTxj7RDBU2Un1+C5YICjczZZ4Uey8zN73iCDoK8SuFeTFMIuN2H/I3y4bpPX/EIj0UzMOeEd5S3NuRl1tnSiRWTYCyYA5peNCh9W6ZU0DywaY/V/SF8SiQfLR",
+        ];
+        for (version, payload) in (1..=3).zip(payloads) {
+            let blob = decrypt_payload(&[42u8; 32], payload, version).unwrap();
+            assert_eq!(blob.key_password.as_str(), "abc/123.xyz", "version {version}");
+        }
     }
 }

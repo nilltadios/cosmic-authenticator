@@ -11,7 +11,7 @@ use std::io::BufReader;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use aes_gcm::aead::OsRng;
+use rand_core::OsRng;
 use pgp::composed::{Deserializable, Message, MessageBuilder, SignedPublicKey, SignedSecretKey};
 use pgp::crypto::hash::HashAlgorithm;
 use pgp::crypto::sym::SymmetricKeyAlgorithm;
