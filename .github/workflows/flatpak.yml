@@ -2,11 +2,18 @@ name: Build and publish Flatpak
 
 # Every push to main builds, signs and publishes the Flatpak repository on
 # GitHub Pages (same pattern as nilltadios/warehouse-cosmic). Add "[skip ci]"
-# to a commit message to push without a release.
+# to a commit message to push without a release, or "[site only]" to redeploy
+# the page with the app already published (ci/mirror-live.sh refuses when app
+# files changed since that build).
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      site_only:
+        description: Redeploy the page only; keep the published app
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,6 +26,7 @@ jobs:
   # The Flatpak build has no network: vendor the crates pinned by Cargo.lock
   # first, as flatpak/build.sh does locally.
   vendor:
+    if: ${{ !(inputs.site_only || contains(github.event.head_commit.message, '[site only]')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -93,8 +101,48 @@ jobs:
         with:
           path: site
 
+  # Site-only release: copy the signed repository that is live, re-sign its
+  # summary (new static deltas) and rebuild the page around the same commit.
+  site:
+    if: ${{ inputs.site_only || contains(github.event.head_commit.message, '[site only]') }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Import repository signing key
+        id: signing
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          test -n "$GPG_PRIVATE_KEY" || { echo '::error::Set the GPG_PRIVATE_KEY repository secret.'; exit 1; }
+          export GNUPGHOME="$RUNNER_TEMP/authenticator-signing"
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          key=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1=="fpr" {print $10; exit}')
+          test -n "$key"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Copy the published repository and rebuild the page
+        env:
+          KEY: ${{ steps.signing.outputs.key }}
+          PAGES_BASE_URL: ${{ vars.PAGES_BASE_URL }}
+        run: |
+          git config --global --add safe.directory "$PWD"
+          base="${PAGES_BASE_URL:-https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/}"
+          source_commit=$(ci/mirror-live.sh "$base" "$KEY" flatpak/repo)
+          flatpak build-update-repo --generate-static-deltas --no-update-appstream --title='COSMIC Authenticator' --gpg-sign="$KEY" flatpak/repo
+          python3 ci/publish.py flatpak/repo site "$base" "$KEY" "$source_commit"
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
   deploy:
-    needs: build
+    needs: [build, site]
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.site.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       pages: write

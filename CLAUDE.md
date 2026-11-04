@@ -150,7 +150,8 @@ Both:
   which builds, signs and publishes the Flatpak repo on GitHub Pages
   (https://nilltadios.github.io/cosmic-authenticator/, branch `stable`, remote
   name `cosmic-authenticator`); "[skip ci]" in a message pushes without a
-  release. The signing key (fingerprint 8402 3450 4490 3206 B410 E737 EFC3
+  release, and "[site only]" redeploys the page around the app already live
+  (ci/mirror-live.sh; it refuses if app files changed since that build). The signing key (fingerprint 8402 3450 4490 3206 B410 E737 EFC3
   7D07 A14D A863) is the GPG_PRIVATE_KEY Actions secret; its only other copy is
   GNUPGHOME=~/.local/share/cosmic-authenticator-flatpak/gnupg. Keep the same
   key: a new one breaks updates for everyone who added the remote. The user's
