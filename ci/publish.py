@@ -40,6 +40,12 @@ ostree_commit = subprocess.check_output(["ostree", f"--repo={repo}", "rev-parse"
 pub = subprocess.check_output(["gpg", "--batch", "--export", key])
 if not pub:
     raise SystemExit("Signing public key not found")
+# The key is published in every .flatpakrepo/.flatpakref; its user IDs must not carry an email address.
+uids = [line.split(":")[9] for line in subprocess.run(
+    ["gpg", "--batch", "--with-colons", "--show-keys"], input=pub, capture_output=True, check=True
+).stdout.decode(errors="replace").splitlines() if line.startswith("uid:")]
+if any("@" in uid for uid in uids):
+    raise SystemExit(f"Signing key user ID contains an email address; remove it before publishing: {uids}")
 with tempfile.TemporaryDirectory(prefix="authenticator-verify-") as keyring:
     os.chmod(keyring, 0o700)
     # OSTree reads an exported legacy keyring, not GnuPG's newer keybox format.
