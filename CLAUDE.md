@@ -167,7 +167,7 @@ Both:
   (`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=2G nice -n 10 …`,
   `CARGO_BUILD_JOBS=6`).
 
-- `cargo build --release`, `cargo test --release` (38 tests, 3 more ignored ones run by `demo/sync-test.sh`), `cargo clippy --release`.
+- `cargo build --release`, `cargo test --release` (41 tests; 3 ignored ones run by `demo/sync-test.sh`, 1 by `demo/qr-sweep.sh`, which checks the QR reader on 48 small screenshot-like codes), `cargo clippy --release`.
   The sign-in helper (`login/`, `cargo build -p cosmic-authenticator-login`)
   needs WebKitGTK 6.0 development files, which this host lacks
   (`webkitgtk6.0-devel`); it builds in the Flatpak (GNOME 51 SDK). A native

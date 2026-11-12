@@ -59,16 +59,68 @@ pub fn import_bytes(bytes: &[u8], password: Option<&str>) -> Result<Imported, Im
 /// Returns the text of the first readable QR code in an image. Transparent
 /// pixels count as white, as they do in Proton's reader, since QR codes saved
 /// from web pages often have a transparent background.
+///
+/// rqrr's own thresholding misses small, smoothed codes, such as a
+/// screenshot of a web page where a module is about 4 px and not a whole
+/// number of pixels. Those read after a global (Otsu) threshold or a smooth
+/// 3x upscale, so both are tried when the image as it is gives nothing.
 fn read_qr_code(bytes: &[u8]) -> Option<String> {
     let image = image::load_from_memory(bytes).ok()?.into_rgba8();
-    let luma = |x: usize, y: usize| {
-        let [r, g, b, a] = image.get_pixel(x as u32, y as u32).0;
+    let grey = image::GrayImage::from_fn(image.width(), image.height(), |x, y| {
+        let [r, g, b, a] = image.get_pixel(x, y).0;
         let grey = (306 * u32::from(r) + 601 * u32::from(g) + 117 * u32::from(b) + 512) >> 10;
         let alpha = u32::from(a);
-        ((grey * alpha + 255 * (255 - alpha)) / 255) as u8
-    };
-    let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(image.width() as usize, image.height() as usize, luma);
+        image::Luma([((grey * alpha + 255 * (255 - alpha)) / 255) as u8])
+    });
+    decode_qr(&grey)
+        .or_else(|| {
+            let threshold = otsu_threshold(&grey);
+            decode_qr(&image::GrayImage::from_fn(grey.width(), grey.height(), |x, y| {
+                image::Luma([if grey.get_pixel(x, y).0[0] <= threshold { 0 } else { 255 }])
+            }))
+        })
+        .or_else(|| {
+            // Only small images: a 3x copy of a large photo costs a lot of
+            // memory, and large images rarely have modules this small.
+            (grey.width().max(grey.height()) <= 1200).then_some(())?;
+            let filter = image::imageops::FilterType::Triangle;
+            decode_qr(&image::imageops::resize(&grey, grey.width() * 3, grey.height() * 3, filter))
+        })
+}
+
+fn decode_qr(grey: &image::GrayImage) -> Option<String> {
+    let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(grey.width() as usize, grey.height() as usize, |x, y| {
+        grey.get_pixel(x as u32, y as u32).0[0]
+    });
     prepared.detect_grids().into_iter().find_map(|grid| grid.decode().ok().map(|(_, text)| text))
+}
+
+/// The grey level that best splits the image into dark and light pixels
+/// (Otsu's method: the largest variance between the two groups).
+fn otsu_threshold(grey: &image::GrayImage) -> u8 {
+    let mut histogram = [0u64; 256];
+    for pixel in grey.pixels() {
+        histogram[usize::from(pixel.0[0])] += 1;
+    }
+    let total: u64 = histogram.iter().sum();
+    let sum: u64 = histogram.iter().enumerate().map(|(level, &count)| level as u64 * count).sum();
+    let (mut dark_count, mut dark_sum) = (0u64, 0u64);
+    let (mut best, mut best_variance) = (127u8, 0f64);
+    for (level, &count) in histogram.iter().enumerate() {
+        dark_count += count;
+        dark_sum += level as u64 * count;
+        let light_count = total - dark_count;
+        if dark_count == 0 || light_count == 0 {
+            continue;
+        }
+        let dark_mean = dark_sum as f64 / dark_count as f64;
+        let light_mean = (sum - dark_sum) as f64 / light_count as f64;
+        let variance = dark_count as f64 * light_count as f64 * (dark_mean - light_mean).powi(2);
+        if variance > best_variance {
+            (best, best_variance) = (level as u8, variance);
+        }
+    }
+    best
 }
 
 pub fn import_text(text: &str, password: Option<&str>) -> Result<Imported, ImportError> {
@@ -222,6 +274,32 @@ mod tests {
         let imported = import_bytes(include_bytes!("../demo/demo-qr.png"), None).unwrap();
         assert_eq!(issuers(&imported), ["Demo"]);
         assert_eq!(imported.entries[0].name(), "demo@example.com");
+    }
+
+    #[test]
+    fn reads_a_small_qr_code_from_a_screenshot() {
+        // Made by demo/make-small-qr.py: about 3 px per module, smoothed.
+        let imported = import_bytes(include_bytes!("../demo/small-qr.png"), None).unwrap();
+        assert_eq!(issuers(&imported), ["Example"]);
+    }
+
+    #[test]
+    #[ignore = "run by demo/qr-sweep.sh"]
+    fn reads_every_qr_code_in_qr_dir() {
+        let mut missed = Vec::new();
+        for entry in std::fs::read_dir(std::env::var("QR_DIR").unwrap()).unwrap() {
+            let path = entry.unwrap().path();
+            let bytes = std::fs::read(&path).unwrap();
+            let read = read_qr_code(&bytes).is_some_and(|text| text.starts_with("otpauth"));
+            // Whether rqrr alone, on the image as it is, would have read it.
+            let plain = decode_qr(&image::load_from_memory(&bytes).unwrap().into_luma8()).is_some();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            eprintln!("{name}: {} (rqrr alone: {})", if read { "read" } else { "MISSED" }, if plain { "read" } else { "missed" });
+            if !read {
+                missed.push(path);
+            }
+        }
+        assert!(missed.is_empty(), "missed {missed:?}");
     }
 
     #[test]
