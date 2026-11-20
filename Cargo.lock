@@ -2006,7 +2006,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2263,7 +2263,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2913,7 +2913,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps 9.0.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4183,7 +4183,7 @@ version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a1886916523694cd6ea3d175f03a1e5010699a2a4cc13696d83d7bea1d80638"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5897,8 +5897,8 @@ checksum = "263a3f48f01e7309e857138bd47f785585b4a005e8e56c6d2824ce91195999c3"
 
 [[package]]
 name = "proton-authenticator"
-version = "2.3.3"
-source = "git+https://github.com/protonpass/proton-pass-common.git#d885d060b09e0ecc28c5e244195f40cdf1219630"
+version = "2.3.5"
+source = "git+https://github.com/protonpass/proton-pass-common.git#806b7b9dbf9e58bbcb36009b60ff31fce2c8155d"
 dependencies = [
  "aes-gcm 0.11.1",
  "argon2 0.6.0",
@@ -5932,8 +5932,8 @@ dependencies = [
 
 [[package]]
 name = "proton-pass-derive"
-version = "2.3.3"
-source = "git+https://github.com/protonpass/proton-pass-common.git#d885d060b09e0ecc28c5e244195f40cdf1219630"
+version = "2.3.5"
+source = "git+https://github.com/protonpass/proton-pass-common.git#806b7b9dbf9e58bbcb36009b60ff31fce2c8155d"
 dependencies = [
  "quote",
  "syn 3.0.9",
@@ -5941,8 +5941,8 @@ dependencies = [
 
 [[package]]
 name = "proton-pass-totp"
-version = "2.3.3"
-source = "git+https://github.com/protonpass/proton-pass-common.git#d885d060b09e0ecc28c5e244195f40cdf1219630"
+version = "2.3.5"
+source = "git+https://github.com/protonpass/proton-pass-common.git#806b7b9dbf9e58bbcb36009b60ff31fce2c8155d"
 dependencies = [
  "proton-pass-derive",
  "serde",
@@ -6426,7 +6426,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6439,7 +6439,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7021,7 +7021,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7278,10 +7278,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7642,7 +7642,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8396,7 +8396,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
