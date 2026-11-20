@@ -172,6 +172,9 @@ pub enum Message {
     LockCreated(Result<(LockConfig, lock::Key), String>),
     RemoveLock,
     LockRemoveChecked(Result<Option<lock::Key>, String>),
+    /// Messages to run once the vault is unlocked. Only the `preview`
+    /// screenshot steps send it.
+    #[cfg_attr(not(feature = "preview"), allow(dead_code))]
     AfterUnlock(Vec<Message>),
 }
 
@@ -1773,13 +1776,14 @@ impl cosmic::Application for AppModel {
                 });
                 return widget::text_input::focus(self.password_id.clone());
             }
-            Message::LockPassword(text) => match &mut self.dialog {
-                Some(Dialog::CreateLock { password, error, .. } | Dialog::RemoveLock { password, error, .. }) => {
+            Message::LockPassword(text) => {
+                if let Some(Dialog::CreateLock { password, error, .. } | Dialog::RemoveLock { password, error, .. }) =
+                    &mut self.dialog
+                {
                     *password = text;
                     *error = None;
                 }
-                _ => {}
-            },
+            }
             Message::LockConfirm(text) => {
                 if let Some(Dialog::CreateLock { confirm, error, .. }) = &mut self.dialog {
                     *confirm = text;

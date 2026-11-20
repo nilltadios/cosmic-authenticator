@@ -69,10 +69,11 @@ pub fn parse_callback(fragment: &str, expected_state: &str) -> Result<Callback, 
         .ok()
         .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
         .ok_or("The sign-in reply has an invalid key")?;
-    let payload_version = match get("pv").and_then(|v| v.parse::<u8>().ok()) {
-        Some(version @ 1..=3) => version,
-        _ => 1,
-    };
+    // Payload versions 1 to 3 exist; anything else falls back to 1.
+    let payload_version = get("pv")
+        .and_then(|v| v.parse::<u8>().ok())
+        .filter(|version| (1..=3).contains(version))
+        .unwrap_or(1);
     Ok(Callback { selector: selector.to_string(), key, payload_version })
 }
 
@@ -161,6 +162,10 @@ mod tests {
         assert!(parse_callback("state=abc", "abc").is_err());
         let no_version = format!("selector=s&state=abc&sk={key}");
         assert_eq!(parse_callback(&no_version, "abc").unwrap().payload_version, 1);
+        for unknown in ["0", "4", "x"] {
+            let fragment = format!("selector=s&state=abc&sk={key}&pv={unknown}");
+            assert_eq!(parse_callback(&fragment, "abc").unwrap().payload_version, 1, "pv={unknown}");
+        }
     }
 
     /// Payloads encrypted by an earlier build (aes-gcm 0.10): crate upgrades
