@@ -5,13 +5,6 @@ edition = "2024"
 license = "GPL-3.0-only"
 description = "Native COSMIC front end for Proton Authenticator's Rust core"
 
-[workspace]
-members = [".", "login"]
-# The sign-in helper needs WebKitGTK's development files, so a plain
-# `cargo build` builds only the app. `cargo build -p cosmic-authenticator-login`
-# builds the helper where those files exist (the GNOME SDK, or webkitgtk6.0-devel).
-default-members = ["."]
-
 [features]
 # GPU rendering. On by default: on the user's 2560x1440 monitor the software
 # renderer idled at 6.1% CPU (64 MB) and lagged when scrolling and resizing,
@@ -26,6 +19,8 @@ preview = []
 # `zeroize` wipes keys and Argon2's working memory when they are dropped.
 aes-gcm = { version = "0.11", features = ["zeroize"] }
 argon2 = { version = "0.6", features = ["zeroize"] }
+# OpenURI portal with Wayland activation token so the browser raises to the front.
+ashpd = { version = "0.14", default-features = false, features = ["open_uri", "tokio"] }
 base64 = "0.23"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 # Account keys and the Authenticator key are OpenPGP (Proton sync).
@@ -45,6 +40,12 @@ ureq = "3"
 # Passwords and keys are wiped from memory when dropped (src/secret.rs).
 zeroize = { version = "1", features = ["serde"] }
 url = "2"
+# Direct Wayland xdg_activation_v1 helper (works around iced_winit dropping
+# pointer click serials while the window holds keyboard focus).
+libc = "0.2"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"

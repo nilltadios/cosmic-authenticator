@@ -1,6 +1,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use cosmic::app::context_drawer::{self, ContextDrawer};
@@ -11,7 +14,7 @@ use cosmic::iced::keyboard::{self, Key, Modifiers};
 use cosmic::iced::{Alignment, Background, Border, Color, Length, Point, Subscription};
 use cosmic::Application;
 use cosmic::prelude::*;
-use cosmic::widget::{self, canvas, container, icon, menu, popover, settings};
+use cosmic::widget::{self, canvas, container, menu, popover, settings};
 use proton_authenticator::{AuthenticatorClient, AuthenticatorEntry};
 
 use crate::form::{self, EntryForm, Field};
@@ -20,13 +23,14 @@ use crate::lock::{self, LockConfig};
 use crate::secret::Secret;
 use zeroize::Zeroizing;
 use crate::logos::{self, Logos};
-use crate::proton::api::USER_AGENT;
+use crate::proton::fork::ForkKey;
 use crate::proton::session::{self, Session};
 use crate::proton::sync::{self as proton_sync, Links, Outcome, Snapshot, SyncError};
-use crate::proton::fork;
 use crate::ring::Countdown;
 use crate::settings::{AppTheme, Settings};
 use crate::store;
+use crate::ui_icons;
+use crate::wayland_activation::WaylandActivation;
 
 const CARD_MIN_WIDTH: f32 = 340.0;
 const TILE_SIZE: f32 = 36.0;
@@ -97,8 +101,11 @@ pub struct AppModel {
     sync_again: bool,
     /// Set when sync was turned off during a sync; sign-out follows it.
     sign_out_after_sync: bool,
-    /// The `state` of the sign-in in progress, checked against the reply.
-    sign_in_state: Option<String>,
+    /// Cancels an active browser sign-in poll; `sign_in_id` drops stale replies.
+    sign_in_cancel: Option<Arc<AtomicBool>>,
+    sign_in_id: u64,
+    sign_in_launched: bool,
+    wayland_activation: Option<WaylandActivation>,
     /// The key the vault is saved with: the keyring's, or the app lock's.
     vault_key: Option<Zeroizing<Vec<u8>>>,
     /// Set while the app lock is on.
@@ -155,8 +162,12 @@ pub enum Message {
 
     SyncToggle(bool),
     SignUp,
-    LoginWindowClosed(Result<String, String>),
-    SignedIn(Result<Session, SyncError>),
+    WindowOpened(cosmic::iced::window::Id),
+    WaylandActivationReady(Option<WaylandActivation>),
+    SignInReady { id: u64, sign_up: bool, token: Option<String> },
+    SignInBrowserOpened(u64, Result<(String, ForkKey), SyncError>),
+    CancelSignIn,
+    SignedIn(u64, Result<Option<Session>, SyncError>),
     SyncNow,
     Synced(Box<(Session, Snapshot, Result<Outcome, SyncError>)>),
     Reordered(Box<(Session, Result<(), SyncError>)>),
@@ -195,46 +206,72 @@ fn background<T: Send + 'static>(
     })
 }
 
-/// The sign-in helper sits next to this binary (and in /app/bin in the Flatpak).
-fn login_helper() -> Option<PathBuf> {
-    let beside = std::env::current_exe().ok()?.with_file_name("cosmic-authenticator-login");
-    beside.is_file().then_some(beside)
+/// Opens `url` in the user's default browser. Prefers the Freedesktop OpenURI
+/// portal (`ashpd`) with a Wayland `xdg_activation_v1` token so the compositor
+/// raises and focuses the browser window, falling back to `xdg-open` where no
+/// portal is available.
+async fn open_in_browser(url: &str, activation_token: Option<String>) -> Result<(), String> {
+    if let Ok(uri) = ashpd::Uri::parse(url) {
+        let mut request = ashpd::desktop::open_uri::OpenFileRequest::default();
+        if let Some(token) = activation_token.clone() {
+            request = request.activation_token(ashpd::ActivationToken::from(token));
+        }
+        if let Ok(response) = request.send_uri(&uri).await
+            && response.response().is_ok()
+        {
+            return Ok(());
+        }
+    }
+    let url = Zeroizing::new(url.to_string());
+    let (sender, receiver) = oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(open_with_xdg_open(url.as_str(), activation_token.as_deref()));
+    });
+    receiver.await.unwrap_or_else(|_| Err(String::from("Cannot open the browser")))
 }
 
-/// The app's theme for the sign-in window, which cannot read the COSMIC theme
-/// inside the Flatpak: `dark` or `light`, then background and text colours.
-fn login_theme() -> [String; 3] {
-    let theme = cosmic::theme::active();
-    let cosmic = theme.cosmic();
-    let hex = |color: Color| {
-        let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-        format!("#{:02x}{:02x}{:02x}", byte(color.r), byte(color.g), byte(color.b))
-    };
-    let background = cosmic.background(false);
-    [
-        String::from(if cosmic.is_dark { "dark" } else { "light" }),
-        hex(background.base.into()),
-        hex(background.on.into()),
-    ]
-}
+fn open_with_xdg_open(url: &str, activation_token: Option<&str>) -> Result<(), String> {
+    let mut command = std::process::Command::new("xdg-open");
+    command
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    if let Some(token) = activation_token {
+        command.env("XDG_ACTIVATION_TOKEN", token);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Cannot open the browser with xdg-open: {error}"))?;
 
-/// Opens the sign-in window and waits for it: the callback fragment, or an
-/// error when the window was closed or could not start.
-fn run_login_window(url: &str, title: &str, theme: &[String; 3]) -> Result<String, String> {
-    let helper = login_helper().ok_or_else(|| {
-        String::from(
-            "The sign-in window (cosmic-authenticator-login) is missing. It is part of the Flatpak; \
-             for a native build, build it with `cargo build -p cosmic-authenticator-login`.",
-        )
-    })?;
-    let output = std::process::Command::new(helper)
-        .args([url, title, USER_AGENT])
-        .args(theme)
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .map_err(|error| format!("Cannot open the sign-in window: {error}"))?;
-    let fragment = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if output.status.success() && !fragment.is_empty() { Ok(fragment) } else { Err(String::new()) }
+    // xdg-open normally hands off to the browser and exits quickly. Watch
+    // briefly for an immediate failure without blocking if a browser stays
+    // attached.
+    for _ in 0..10 {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                let mut stderr = String::new();
+                if let Some(mut pipe) = child.stderr.take() {
+                    let _ = pipe.read_to_string(&mut stderr);
+                }
+                let detail = stderr.trim();
+                return Err(if detail.is_empty() {
+                    format!("Cannot open the browser (xdg-open exited with {status})")
+                } else {
+                    format!("Cannot open the browser: {detail}")
+                });
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(error) => return Err(format!("Cannot open the browser: {error}")),
+        }
+    }
+
+    // Still running: reap it in the background so we never leave a zombie.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// Actions in a card's right-click menu.
@@ -360,7 +397,7 @@ fn error_banner(error: &str, on_close: Option<Message>) -> Element<'static, Mess
         .push(widget::text::body(error.to_owned()).width(Length::Fill))
         .align_y(Alignment::Center);
     if let Some(message) = on_close {
-        row = row.push(widget::button::icon(icon::from_name("window-close-symbolic").size(16)).on_press(message));
+        row = row.push(widget::button::icon(ui_icons::handle(ui_icons::WINDOW_CLOSE)).icon_size(16).on_press(message));
     }
     container(row)
         .padding(10)
@@ -562,7 +599,7 @@ impl AppModel {
             widget::button::suggested("Unlock").on_press(Message::Unlock)
         };
         let mut column = widget::column::with_capacity(6)
-            .push(icon::from_name("system-lock-screen-symbolic").size(64))
+            .push(ui_icons::sized(ui_icons::LOCK, 64))
             .push(widget::text::title3("Unlock Authenticator"))
             .push(widget::text::body("Enter your password:"))
             .push(
@@ -742,13 +779,85 @@ impl AppModel {
         }
     }
 
+    fn cancel_sign_in(&mut self) {
+        if let Some(cancel) = self.sign_in_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.sign_in_id = self.sign_in_id.wrapping_add(1);
+        self.sign_in_launched = false;
+        if self.sync == SyncStatus::SigningIn {
+            self.sync = SyncStatus::Off;
+        }
+    }
+
+    fn attach_wayland_activation(&self, id: cosmic::iced::window::Id) -> Task<cosmic::Action<Message>> {
+        if self.wayland_activation.is_some() || std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            return Task::none();
+        }
+        cosmic::iced::window::run(id, WaylandActivation::attach)
+            .map(|helper| cosmic::Action::App(Message::WaylandActivationReady(helper)))
+    }
+
     fn sign_in(&mut self, sign_up: bool) -> Task<cosmic::Action<Message>> {
-        let request = fork::request(sign_up);
-        self.sign_in_state = Some(request.state);
+        self.cancel_sign_in();
+        let id = self.sign_in_id;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.sign_in_cancel = Some(cancel);
         self.sync = SyncStatus::SigningIn;
-        let title = if sign_up { "Sign up" } else { "Log in" };
-        let theme = login_theme();
-        background(move || run_login_window(&request.url, title, &theme), Message::LoginWindowClosed)
+
+        // Ask Wayland for an xdg_activation_v1 token tied to the latest input
+        // serial so the OpenURI portal can raise the browser to the front.
+        // Prefer our direct helper (which tracks pointer, keyboard, and touch
+        // serials alike); fall back to iced_winit if it has not attached yet.
+        if let Some(activation) = self.wayland_activation.clone() {
+            let receiver = activation.request_token();
+            return cosmic::task::future(async move {
+                let token = tokio::time::timeout(Duration::from_millis(250), receiver)
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .flatten();
+                Message::SignInReady { id, sign_up, token }
+            });
+        }
+        if std::env::var_os("WAYLAND_DISPLAY").is_some()
+            && let Some(window) = self.core.main_window_id()
+        {
+            let token_task = cosmic::iced::platform_specific::shell::commands::activation::request_token(
+                None,
+                Some(window),
+            )
+            .map(move |token| cosmic::Action::App(Message::SignInReady { id, sign_up, token }));
+            let fallback_task = cosmic::task::future(async move {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                Message::SignInReady { id, sign_up, token: None }
+            });
+            return Task::batch([token_task, fallback_task]);
+        }
+
+        self.sign_in_launched = true;
+        self.launch_sign_in(id, sign_up, None)
+    }
+
+    fn launch_sign_in(&mut self, id: u64, sign_up: bool, token: Option<String>) -> Task<cosmic::Action<Message>> {
+        cosmic::task::future(async move {
+            let (sender, receiver) = oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = sender.send(proton_sync::start_sign_in(sign_up));
+            });
+            let result = match receiver.await {
+                Ok(Ok(fork)) => {
+                    let open_result = open_in_browser(fork.url.as_str(), token).await;
+                    let selector = fork.selector;
+                    let key = fork.key;
+                    drop(fork.url);
+                    open_result.map(|()| (selector, key)).map_err(SyncError::Failed)
+                }
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(SyncError::Failed(String::from("Sign-in stopped unexpectedly"))),
+            };
+            Message::SignInBrowserOpened(id, result)
+        })
     }
 
     fn request_logos(&mut self) -> Task<cosmic::Action<Message>> {
@@ -902,12 +1011,12 @@ impl AppModel {
             .class(card_class())
             .on_press(Message::Copy(index));
 
-        let entry = |label, icon_name: &str, action| menu::Item::Button(label, Some(icon::from_name(icon_name).into()), action);
+        let entry = |label, svg: &'static [u8], action| menu::Item::Button(label, Some(ui_icons::handle(svg)), action);
         let actions = vec![
-            menu::Item::Button("Copy next code", Some(icon::from_name("edit-copy-symbolic").into()), CardAction::CopyNext(index)),
-            entry("Edit", "document-edit-symbolic", CardAction::Edit(index)),
+            entry("Copy next code", ui_icons::COPY, CardAction::CopyNext(index)),
+            entry("Edit", ui_icons::EDIT, CardAction::Edit(index)),
             menu::Item::Divider,
-            entry("Delete", "user-trash-symbolic", CardAction::Delete(index)),
+            entry("Delete", ui_icons::DELETE, CardAction::Delete(index)),
         ];
         widget::context_menu(card, Some(menu::items(&HashMap::new(), actions))).into()
     }
@@ -955,9 +1064,9 @@ impl AppModel {
     }
 
     fn add_menu(&self) -> Element<'_, Message> {
-        let item = |icon_name: &'static str, label: &'static str, message: Message| -> Element<'_, Message> {
+        let item = |svg: &'static [u8], label: &'static str, message: Message| -> Element<'_, Message> {
             menu::menu_button(vec![
-                icon::from_name(icon_name).size(16).into(),
+                ui_icons::sized(svg, 16).into(),
                 widget::space().width(12).into(),
                 widget::text::body(label).into(),
             ])
@@ -966,10 +1075,10 @@ impl AppModel {
         };
         container(
             widget::column::with_capacity(4)
-                .push(item("list-add-symbolic", "Enter a setup key", Message::AddManually))
-                .push(item("image-x-generic-symbolic", "Scan QR code image…", Message::ScanQrImage))
-                .push(item("edit-paste-symbolic", "Paste otpauth:// link", Message::PasteLink))
-                .push(item("document-open-symbolic", "Import from another app…", Message::ImportFile)),
+                .push(item(ui_icons::ADD, "Enter a setup key", Message::AddManually))
+                .push(item(ui_icons::QR_IMAGE, "Scan QR code image…", Message::ScanQrImage))
+                .push(item(ui_icons::PASTE, "Paste otpauth:// link", Message::PasteLink))
+                .push(item(ui_icons::IMPORT, "Import from another app…", Message::ImportFile)),
         )
         .padding(4)
         .width(280)
@@ -979,7 +1088,7 @@ impl AppModel {
 
     fn toolbar(&self) -> Element<'_, Message> {
         let add_button = widget::button::suggested("Add")
-            .leading_icon(icon::from_name("list-add-symbolic"))
+            .leading_icon(ui_icons::handle(ui_icons::ADD))
             .on_press(Message::ToggleAddMenu);
         let mut add = popover(add_button).position(popover::Position::Point(Point::new(0.0, 40.0)));
         if self.add_menu_open {
@@ -996,7 +1105,7 @@ impl AppModel {
                     .width(Length::Fill),
             )
             .push(
-                widget::button::icon(icon::from_name("preferences-system-symbolic"))
+                widget::button::icon(ui_icons::handle(ui_icons::SETTINGS))
                     .tooltip("Settings")
                     .on_press(Message::OpenSettings),
             )
@@ -1055,7 +1164,7 @@ impl AppModel {
         } else {
             content = content.push(
                 widget::button::text("Advanced options")
-                    .trailing_icon(icon::from_name("pan-down-symbolic"))
+                    .trailing_icon(ui_icons::handle(ui_icons::DROPDOWN))
                     .on_press(Message::Form(Field::ShowAdvanced)),
             );
         }
@@ -1084,7 +1193,7 @@ impl AppModel {
         let theme_index = AppTheme::ALL.iter().position(|theme| *theme == self.settings.theme);
 
         let (sync_on, sync_label) = match (&self.sync, &self.session) {
-            (SyncStatus::SigningIn, _) => (true, String::from("Signing in…")),
+            (SyncStatus::SigningIn, _) => (true, String::from("Finish signing in using your browser…")),
             (SyncStatus::Syncing, _) => (true, String::from("Syncing…")),
             (SyncStatus::Error(message), Some(session)) => (true, format!("Account: {}. {message}", session.email)),
             (SyncStatus::Error(message), None) => (false, message.clone()),
@@ -1102,6 +1211,12 @@ impl AppModel {
                 settings::item::builder("Sync now")
                     .description("Codes also sync when the app starts and after each change.")
                     .control(widget::button::standard("Sync now").on_press_maybe((!busy).then_some(Message::SyncNow))),
+            );
+        } else if self.sync == SyncStatus::SigningIn {
+            security = security.add(
+                settings::item::builder("Waiting for browser")
+                    .description("Sign in on Proton's page, then return here.")
+                    .control(widget::button::standard("Cancel").on_press(Message::CancelSignIn)),
             );
         } else if !busy {
             security = security.add(
@@ -1233,7 +1348,10 @@ impl cosmic::Application for AppModel {
             sync: SyncStatus::Off,
             sync_again: false,
             sign_out_after_sync: false,
-            sign_in_state: None,
+            sign_in_cancel: None,
+            sign_in_id: 0,
+            sign_in_launched: false,
+            wayland_activation: None,
             vault_key: None,
             locked: lock_config.is_some().then(Locked::default),
             after_unlock: Vec::new(),
@@ -1251,6 +1369,7 @@ impl cosmic::Application for AppModel {
         }];
         if let Some(id) = app.core.main_window_id() {
             tasks.push(app.set_window_title(String::from("Authenticator"), id));
+            tasks.push(app.attach_wayland_activation(id));
         }
         if app.settings.theme != AppTheme::System {
             tasks.push(cosmic::command::set_theme(app.settings.theme.theme()));
@@ -1286,7 +1405,7 @@ impl cosmic::Application for AppModel {
                         "Make sure you can still sign in to {label}, with another authenticator or a recovery \
                          code, or turn off two-factor authentication there first. This cannot be undone."
                     ))
-                    .icon(icon::from_name("dialog-warning-symbolic").size(64))
+                    .icon(ui_icons::sized(ui_icons::WARNING, 64))
                     .primary_action(widget::button::destructive("Delete").on_press(Message::ConfirmDelete))
                     .secondary_action(widget::button::standard("Cancel").on_press(Message::CloseDialog))
             }
@@ -1430,7 +1549,8 @@ impl cosmic::Application for AppModel {
             keyboard::Event::KeyPressed { key, modifiers, .. } => Some(Message::Key(key, modifiers)),
             _ => None,
         });
-        Subscription::batch([ticks, keys])
+        let windows = cosmic::iced::window::open_events().map(Message::WindowOpened);
+        Subscription::batch([ticks, keys, windows])
     }
 
     fn on_escape(&mut self) -> Task<cosmic::Action<Message>> {
@@ -1694,6 +1814,10 @@ impl cosmic::Application for AppModel {
                 }
             }
             Message::SyncToggle(false) => {
+                if self.sync == SyncStatus::SigningIn {
+                    self.cancel_sign_in();
+                    return Task::none();
+                }
                 if self.sync == SyncStatus::Syncing {
                     // Two syncs at once could upload the same new code twice.
                     self.sign_out_after_sync = true;
@@ -1864,29 +1988,71 @@ impl cosmic::Application for AppModel {
                     }
                 }
             }
-            Message::SignUp => return self.sign_in(true),
-            Message::LoginWindowClosed(Err(error)) => {
-                self.sign_in_state = None;
-                self.sync = SyncStatus::Off;
-                if !error.is_empty() {
-                    self.sync = SyncStatus::Error(error);
+            Message::SignUp => {
+                if self.session.is_none() && !matches!(self.sync, SyncStatus::SigningIn | SyncStatus::Syncing) {
+                    return self.sign_in(true);
                 }
             }
-            Message::LoginWindowClosed(Ok(fragment)) => {
-                let Some(state) = self.sign_in_state.take() else {
-                    return Task::none();
-                };
-                return background(move || proton_sync::sign_in(&fragment, &state), Message::SignedIn);
+            Message::WindowOpened(id) => {
+                if self.wayland_activation.is_none() && self.core.main_window_id() == Some(id) {
+                    return self.attach_wayland_activation(id);
+                }
             }
-            Message::SignedIn(Err(error)) => self.sync = SyncStatus::Error(error.message()),
-            Message::SignedIn(Ok(session)) => {
-                if let Err(error) = session::save(&session, self.lock_key().as_ref()) {
-                    self.sync = SyncStatus::Error(error);
+            Message::WaylandActivationReady(helper) => {
+                if self.wayland_activation.is_none() {
+                    self.wayland_activation = helper;
+                }
+            }
+            Message::SignInReady { id, sign_up, token } => {
+                if id != self.sign_in_id || self.sign_in_launched {
                     return Task::none();
                 }
-                self.session = Some(session);
-                let toast = self.toast("Sync enabled");
-                return Task::batch([toast, self.start_sync()]);
+                self.sign_in_launched = true;
+                return self.launch_sign_in(id, sign_up, token);
+            }
+            Message::SignInBrowserOpened(id, result) => {
+                if id != self.sign_in_id {
+                    return Task::none();
+                }
+                match result {
+                    Err(error) => {
+                        self.sign_in_cancel = None;
+                        self.sign_in_launched = false;
+                        self.sync = SyncStatus::Error(error.message());
+                    }
+                    Ok((selector, key)) => {
+                        let Some(cancel) = self.sign_in_cancel.clone() else {
+                            return Task::none();
+                        };
+                        let toast = self.toast("Opened Proton sign-in in your browser");
+                        let poll = background(
+                            move || proton_sync::wait_for_sign_in(&selector, key.as_bytes(), &cancel),
+                            move |result| Message::SignedIn(id, result),
+                        );
+                        return Task::batch([toast, poll]);
+                    }
+                }
+            }
+            Message::CancelSignIn => self.cancel_sign_in(),
+            Message::SignedIn(id, result) => {
+                if id != self.sign_in_id {
+                    return Task::none();
+                }
+                self.sign_in_cancel = None;
+                self.sign_in_launched = false;
+                match result {
+                    Ok(None) => self.sync = SyncStatus::Off,
+                    Err(error) => self.sync = SyncStatus::Error(error.message()),
+                    Ok(Some(session)) => {
+                        if let Err(error) = session::save(&session, self.lock_key().as_ref()) {
+                            self.sync = SyncStatus::Error(error);
+                            return Task::none();
+                        }
+                        self.session = Some(session);
+                        let toast = self.toast("Sync enabled");
+                        return Task::batch([toast, self.start_sync()]);
+                    }
+                }
             }
             Message::SyncNow => {
                 if self.sync != SyncStatus::Syncing {

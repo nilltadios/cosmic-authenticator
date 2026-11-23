@@ -10,8 +10,11 @@ mod ring;
 mod secret;
 mod settings;
 mod store;
+mod ui_icons;
+mod wayland_activation;
+mod window_icons;
 
-use std::path::{Path, PathBuf};
+pub const APP_ID: &str = "dev.nilltadios.CosmicAuthenticator";
 
 /// `--import FILE` adds the codes from an export or QR code image and exits.
 /// Password-protected exports read the password from `AUTHENTICATOR_EXPORT_PASSWORD`.
@@ -35,50 +38,6 @@ fn import_from_command_line(path: &str) -> Result<String, String> {
     Ok(format!("Imported {} codes into {}", entries.len() - before, store::vault_path().display()))
 }
 
-/// Reads `key` from `[section]` of an INI-style file such as `kdeglobals`.
-fn ini_value(path: &Path, section: &str, key: &str) -> Option<String> {
-    let contents = std::fs::read_to_string(path).ok()?;
-    let mut in_section = false;
-    for line in contents.lines().map(str::trim) {
-        if line.starts_with('[') {
-            in_section = line == format!("[{section}]");
-        } else if in_section
-            && let Some((name, value)) = line.split_once('=')
-            && name.trim() == key
-        {
-            return Some(value.trim().to_string());
-        }
-    }
-    None
-}
-
-/// libcosmic looks icons up in the COSMIC icon theme. Outside COSMIC that
-/// theme is usually not installed and symbolic icons come out blank, so use
-/// the desktop's own theme instead: KDE's, then GTK's, then Breeze or Adwaita.
-fn fallback_icon_theme() -> Option<String> {
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    let data_home = std::env::var_os("XDG_DATA_HOME").map_or_else(|| home.join(".local/share"), PathBuf::from);
-    let config_home = std::env::var_os("XDG_CONFIG_HOME").map_or_else(|| home.join(".config"), PathBuf::from);
-    let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| String::from("/usr/local/share:/usr/share"));
-
-    let mut icon_dirs = vec![data_home.join("icons"), home.join(".icons")];
-    icon_dirs.extend(data_dirs.split(':').filter(|dir| !dir.is_empty()).map(|dir| Path::new(dir).join("icons")));
-    let installed = |name: &str| icon_dirs.iter().any(|dir| dir.join(name).join("index.theme").is_file());
-
-    if installed("Cosmic") {
-        return None;
-    }
-    [
-        ini_value(&config_home.join("kdeglobals"), "Icons", "Theme"),
-        ini_value(&config_home.join("gtk-3.0/settings.ini"), "Settings", "gtk-icon-theme-name"),
-        Some(String::from("breeze")),
-        Some(String::from("Adwaita")),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|name| installed(name))
-}
-
 fn main() -> cosmic::iced::Result {
     let args: Vec<String> = std::env::args().collect();
     if let [_, flag, path] = args.as_slice()
@@ -96,10 +55,25 @@ fn main() -> cosmic::iced::Result {
         }
     }
 
+    // Prepare the compiled-in private icon theme for libcosmic's own widgets
+    // before any worker thread starts (window_icons::prepare updates XDG_DATA_DIRS
+    // momentarily while libcosmic's icon lookup cache initializes).
+    let icons = window_icons::prepare();
+    if args.get(1).map(String::as_str) == Some("--check-icons") {
+        let report = serde_json::json!({
+            "icon_theme": icons.theme,
+            "icons_checked": icons.icons_checked,
+            "icons_missing": icons.icons_missing,
+            "summary": icons.summary,
+        });
+        println!("{report}");
+        std::process::exit(if icons.ok() { 0 } else { 1 });
+    }
+
     let mut settings = cosmic::app::Settings::default()
         .size(cosmic::iced::Size::new(1100.0, 720.0))
         .size_limits(cosmic::iced::Limits::NONE.min_width(380.0).min_height(300.0));
-    if let Some(theme) = fallback_icon_theme() {
+    if let Some(theme) = icons.theme {
         settings = settings.default_icon_theme(theme);
     }
 

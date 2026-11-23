@@ -3,7 +3,7 @@
 #
 #   flatpak/release.sh 0.3.0
 #
-# Raises the version (Cargo.toml, login/Cargo.toml, Cargo.lock, metainfo),
+# Raises the version (Cargo.toml, Cargo.lock, metainfo),
 # runs the tests, builds with flatpak/build.sh, commits the version change, and
 # updates the installed app from the local repository flatpak/repo (the
 # `cosmicauthenticator` remote, added here if missing). The vault, app lock and
@@ -36,10 +36,8 @@ fi
 
 trap 'echo "Release stopped. Undo the version change with: git checkout -- ." >&2' ERR
 
-# The version line is the first one in each [package] table.
-for manifest in Cargo.toml login/Cargo.toml; do
-    sed -i "0,/^version = \".*\"/s//version = \"$version\"/" "$manifest"
-done
+# The version line is the first one in the [package] table.
+sed -i "0,/^version = \".*\"/s//version = \"$version\"/" Cargo.toml
 cargo update --offline --workspace --quiet
 sed -i "s|<releases>|<releases>\n    <release version=\"$version\" date=\"$(date +%F)\"/>|" \
     "resources/$app_id.metainfo.xml"

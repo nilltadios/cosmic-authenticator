@@ -13,7 +13,8 @@
 //! Proton has deleted it too.
 
 use std::collections::{HashMap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -33,6 +34,10 @@ use super::session::Session;
 
 /// Entries per request, as the official app sends them.
 const BATCH_SIZE: usize = 100;
+/// How often to poll Proton while waiting for browser sign-in (`signInWithAnotherDevicePull.ts`).
+const SIGN_IN_POLL_INTERVAL: Duration = Duration::from_secs(3);
+/// How long a desktop fork stays valid (`signInWithAnotherDevicePull.ts`: 9 minutes).
+const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(9 * 60);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyncError {
@@ -149,27 +154,82 @@ fn string(value: &Value, pointer: &str) -> Option<String> {
     value.pointer(pointer).and_then(Value::as_str).map(str::to_string)
 }
 
-/// Finishes a sign-in from the login window's callback fragment.
-pub fn sign_in(fragment: &str, state: &str) -> Result<Session, SyncError> {
-    let callback = fork::parse_callback(fragment, state).map_err(SyncError::Failed)?;
-    let mut client = Client::new(None);
-    let pulled = client.request_anonymous(Method::Get, &format!("auth/v4/sessions/forks/{}", callback.selector))?;
+/// Starts a desktop browser sign-in: asks Proton for a fork selector and user
+/// code and builds the `/desktop/login` address to open in the system browser.
+pub fn start_sign_in(sign_up: bool) -> Result<fork::DesktopFork, SyncError> {
+    start_sign_in_with(&Client::new(None), sign_up)
+}
 
-    let tokens = match (string(&pulled, "/UID"), string(&pulled, "/AccessToken"), string(&pulled, "/RefreshToken")) {
+fn start_sign_in_with(client: &Client, sign_up: bool) -> Result<fork::DesktopFork, SyncError> {
+    let created = client.request_anonymous(Method::Get, "auth/v4/sessions/forks")?;
+    let selector = string(&created, "/Selector")
+        .ok_or_else(|| SyncError::Failed(String::from("Proton's sign-in reply has no selector")))?;
+    let user_code = string(&created, "/UserCode")
+        .ok_or_else(|| SyncError::Failed(String::from("Proton's sign-in reply has no user code")))?;
+    fork::desktop_request(selector, &user_code, sign_up).map_err(SyncError::Failed)
+}
+
+/// Polls Proton until the browser sign-in completes, `cancel` is set, or the
+/// fork expires. Returns `Ok(None)` when cancelled.
+pub fn wait_for_sign_in(selector: &str, key: &[u8; 32], cancel: &AtomicBool) -> Result<Option<Session>, SyncError> {
+    let mut client = Client::new(None);
+    wait_for_sign_in_with(&mut client, selector, key, cancel, SIGN_IN_POLL_INTERVAL, SIGN_IN_TIMEOUT)
+}
+
+fn wait_for_sign_in_with(
+    client: &mut Client,
+    selector: &str,
+    key: &[u8; 32],
+    cancel: &AtomicBool,
+    interval: Duration,
+    timeout: Duration,
+) -> Result<Option<Session>, SyncError> {
+    let deadline = Instant::now() + timeout;
+    let path = format!("auth/v4/sessions/forks/{selector}");
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let offline_error = match client.request_anonymous(Method::Get, &path) {
+            Ok(pulled) => return finish_sign_in(client, &pulled, key).map(Some),
+            Err(ApiError::Proton { status: 422, .. }) => None,
+            Err(ApiError::Offline(detail)) => Some(detail),
+            Err(error) => return Err(error.into()),
+        };
+        if Instant::now() >= deadline {
+            return Err(match offline_error {
+                Some(detail) => SyncError::Offline(detail),
+                None => SyncError::Failed(String::from("Sign-in timed out. Try again.")),
+            });
+        }
+        let sleep_until = (Instant::now() + interval).min(deadline);
+        while Instant::now() < sleep_until {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+            let remaining = sleep_until.saturating_duration_since(Instant::now());
+            std::thread::sleep(remaining.min(Duration::from_millis(100)));
+        }
+    }
+}
+
+fn finish_sign_in(client: &mut Client, pulled: &Value, key: &[u8; 32]) -> Result<Session, SyncError> {
+    let tokens = match (string(pulled, "/UID"), string(pulled, "/AccessToken"), string(pulled, "/RefreshToken")) {
         (Some(uid), Some(access_token), Some(refresh_token)) => Tokens { uid, access_token, refresh_token },
         _ => return Err(SyncError::Failed(String::from("The sign-in reply has no session"))),
     };
-    let payload = string(&pulled, "/Payload")
+    let payload = string(pulled, "/Payload")
         .ok_or_else(|| SyncError::Failed(String::from("The sign-in reply has no key password")))?;
     let key_password =
-        fork::decrypt_payload(&callback.key, &payload, callback.payload_version).map_err(SyncError::Failed)?.key_password;
+        fork::decrypt_desktop_payload(key, &payload).map_err(SyncError::Failed)?.key_password;
 
     client.tokens = Some(tokens);
     let user = client.request(Method::Get, "core/v4/users", None)?;
     unlock_user_keys(&user, &key_password).map_err(SyncError::Failed)?;
     let email = string(&user, "/User/Email").or_else(|| string(&user, "/User/Name")).unwrap_or_default();
 
-    Ok(Session { tokens: client.tokens.expect("set above"), key_password, email })
+    Ok(Session { tokens: client.tokens.take().expect("set above"), key_password, email })
 }
 
 /// Runs `work` with a client for `session`, and keeps tokens a refresh
@@ -909,5 +969,147 @@ mod tests {
         // B and C swapped: either reading is one move.
         assert!(moved(&codes, &[0, 2, 1, 3], &links).is_some());
         assert_eq!(moved(&codes, &[0, 1, 2, 3], &links), None);
+    }
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+        let mut buf = [0u8; 4096];
+        let mut req = Vec::new();
+        loop {
+            let n = stream.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            req.extend_from_slice(&buf[..n]);
+            if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&req).into_owned()
+    }
+
+    fn write_http_json(stream: &mut std::net::TcpStream, status: &str, body: &Value) {
+        use std::io::Write;
+        let json = body.to_string();
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+            json.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn desktop_browser_sign_in_polls_until_pushed_and_unlocks_keys() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://{addr}");
+        let key_password = include_str!("../../tests/fixtures/user-key.password");
+        let user_key = include_str!("../../tests/fixtures/user-key.asc");
+
+        let (key_tx, key_rx) = std::sync::mpsc::channel::<[u8; 32]>();
+        let server = std::thread::spawn(move || {
+            // 1. GET /auth/v4/sessions/forks
+            let (mut s, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut s);
+            assert!(req.starts_with("GET /auth/v4/sessions/forks HTTP/"));
+            assert!(req.to_ascii_lowercase().contains("x-pm-appversion: linux-authenticator@"));
+            assert!(!req.to_ascii_lowercase().contains("electron"), "user agent should not spoof Electron");
+            write_http_json(&mut s, "200 OK", &json!({"Code": 1000, "Selector": "sel-test", "UserCode": "CODE1234"}));
+
+            // 2. First poll: HTTP 422 (user has not finished in browser yet).
+            let (mut s, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut s);
+            assert!(req.starts_with("GET /auth/v4/sessions/forks/sel-test HTTP/"));
+            write_http_json(&mut s, "422 Unprocessable Entity", &json!({"Code": 2001, "Error": "Invalid selector"}));
+
+            // 3. Second poll: browser pushed the encrypted payload.
+            let browser_key = key_rx.recv().unwrap();
+            let payload = fork::encrypt_for_test(
+                &browser_key,
+                fork::DESKTOP_PAYLOAD_VERSION,
+                &json!({"type": "default", "keyPassword": key_password}).to_string(),
+            );
+            let (mut s, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut s);
+            assert!(req.starts_with("GET /auth/v4/sessions/forks/sel-test HTTP/"));
+            write_http_json(&mut s, "200 OK", &json!({
+                "Code": 1000,
+                "UID": "uid-browser",
+                "AccessToken": "tok-access",
+                "RefreshToken": "tok-refresh",
+                "Payload": payload,
+            }));
+
+            // 4. GET /core/v4/users with the new tokens.
+            let (mut s, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut s);
+            assert!(req.starts_with("GET /core/v4/users HTTP/"));
+            assert!(req.contains("Authorization: Bearer tok-access") || req.to_ascii_lowercase().contains("authorization: bearer tok-access"));
+            write_http_json(&mut s, "200 OK", &json!({
+                "Code": 1000,
+                "User": {
+                    "Email": "browser-test@example.invalid",
+                    "Keys": [{"ID": "uk-1", "PrivateKey": user_key, "Primary": 1, "Active": 1}]
+                }
+            }));
+        });
+
+        let mut client = Client::with_base_url(base_url, None);
+        let desktop_fork = start_sign_in_with(&client, false).unwrap();
+        assert_eq!(desktop_fork.selector, "sel-test");
+
+        // Extract the key the way Proton's `/desktop/login` page parses `#payload=...`.
+        let parsed = url::Url::parse(desktop_fork.url.as_str()).unwrap();
+        let raw_payload = url::form_urlencoded::parse(parsed.fragment().unwrap().as_bytes())
+            .find_map(|(k, v)| (k == "payload").then(|| v.into_owned()))
+            .unwrap();
+        let parts: Vec<&str> = raw_payload.split(':').collect();
+        assert_eq!((parts[0], parts[1], parts[3]), ("0", "CODE1234", "linux-authenticator"));
+        let browser_key: [u8; 32] = STANDARD.decode(parts[2]).unwrap().try_into().unwrap();
+        key_tx.send(browser_key).unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let session = wait_for_sign_in_with(
+            &mut client,
+            &desktop_fork.selector,
+            desktop_fork.key.as_bytes(),
+            &cancel,
+            Duration::from_millis(20),
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .expect("signed in session");
+        assert_eq!(session.email, "browser-test@example.invalid");
+        assert_eq!(session.tokens.uid, "uid-browser");
+        assert_eq!(session.key_password.as_str(), key_password);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn desktop_browser_sign_in_stops_when_cancelled() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let cancel_server = cancel.clone();
+
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut s);
+            write_http_json(&mut s, "422 Unprocessable Entity", &json!({"Code": 2001, "Error": "Invalid selector"}));
+            cancel_server.store(true, Ordering::Relaxed);
+        });
+
+        let mut client = Client::with_base_url(format!("http://{addr}"), None);
+        let result = wait_for_sign_in_with(
+            &mut client,
+            "sel-cancel",
+            &[0u8; 32],
+            &cancel,
+            Duration::from_secs(10),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert!(result.is_none());
+        server.join().unwrap();
     }
 }

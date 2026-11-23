@@ -11,6 +11,8 @@ cargo build --release --manifest-path "$project_dir/Cargo.toml"
 
 install -Dm755 "$project_dir/target/release/cosmic-authenticator" "$bin_dir/cosmic-authenticator"
 install -Dm644 "$project_dir/resources/$app_id.svg" "$data_home/icons/hicolor/scalable/apps/$app_id.svg"
+mkdir -p "$data_home/icons"
+cp -r "$project_dir/resources/icons/CosmicAuthenticator" "$data_home/icons/"
 # Exec gets the absolute path, so the entry works even when ~/.local/bin is not on PATH.
 sed "s|^Exec=.*|Exec=$bin_dir/cosmic-authenticator|" "$project_dir/resources/$app_id.desktop" \
     > "$data_home/applications/$app_id.desktop"

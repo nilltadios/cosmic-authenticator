@@ -1,86 +1,106 @@
-//! Session fork: how the official app signs in (docs/proton-sync.md).
-//! Proton's account site does the sign-in and hands back a selector and a
-//! one-time key; the session is pulled with the selector, and the key decrypts
-//! the payload holding the key password.
+//! Desktop browser session fork (docs/proton-sync.md).
+//!
+//! Instead of embedding a web view, the app requests a fork selector and user
+//! code from Proton (`GET auth/v4/sessions/forks`), generates a one-time
+//! 32-byte AES-256-GCM key, and opens `https://account.proton.me/desktop/login`
+//! in the user's system browser with `0:<userCode>:<base64(key)>:linux-authenticator`
+//! in the URL fragment (`#payload=...`). Proton's account page handles the
+//! password, 2FA, passkeys and CAPTCHA, encrypts the key password with our
+//! one-time key, and pushes the fork; the app polls `GET auth/v4/sessions/forks/{selector}`
+//! until the session is ready and decrypts the payload locally.
 
 use aes_gcm::aead::consts::U16;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::aes::Aes256;
 use aes_gcm::{Aes256Gcm, AesGcm, Nonce};
 use base64::Engine;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
-use super::api::{APP_NAME, SSO_URL};
+use super::api::{APP_NAME, CLIENT_ID, SSO_URL};
 
 /// AES-256-GCM with the 16-byte IV that payload versions 1 and 2 use.
 type Aes256Gcm16 = AesGcm<Aes256, U16>;
 
-pub struct ForkRequest {
-    pub url: String,
-    pub state: String,
-}
+/// Payload version requested in `/desktop/login?pv=...` (12-byte IV, AAD `fork`, UTF-8).
+pub const DESKTOP_PAYLOAD_VERSION: u8 = 3;
 
-/// The sign-in address, with the parameters in the official app's order.
-pub fn request(sign_up: bool) -> ForkRequest {
-    let mut random = [0u8; 32];
-    OsRng.fill_bytes(&mut random);
-    let state = URL_SAFE_NO_PAD.encode(random);
-    let mut params = vec![
-        ("app", APP_NAME),
-        ("state", state.as_str()),
-        ("independent", "0"),
-        ("prompt", "login"),
-        ("promptBypass", "sso"),
-        ("promptType", "offline"),
-        ("pt", "offline"),
-        ("t", if sign_up { "2" } else { "3" }),
-    ];
-    if sign_up {
-        params.push(("plan", "free"));
+/// Payload schema version expected by Proton's `deserializeQrCodePayload`.
+const DESKTOP_FORK_SCHEMA_VERSION: u8 = 0;
+
+/// One-time 32-byte AES-256-GCM key for a desktop browser fork: wiped on drop
+/// and never printed by `Debug`.
+#[derive(Clone)]
+pub struct ForkKey(Zeroizing<[u8; 32]>);
+
+impl ForkKey {
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
     }
-    let query: Vec<String> = params.iter().map(|(key, value)| format!("{key}={value}")).collect();
-    ForkRequest { url: format!("{SSO_URL}/authorize?{}", query.join("&")), state }
 }
 
-#[derive(Debug, PartialEq)]
-pub struct Callback {
+impl std::fmt::Debug for ForkKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ForkKey(…)")
+    }
+}
+
+pub struct DesktopFork {
     pub selector: String,
-    pub key: [u8; 32],
-    pub payload_version: u8,
+    pub key: ForkKey,
+    pub url: Zeroizing<String>,
 }
 
-/// Reads the fragment of the sign-in callback, and checks that it answers
-/// this app's own request.
-pub fn parse_callback(fragment: &str, expected_state: &str) -> Result<Callback, String> {
-    let params: Vec<(String, String)> =
-        url::form_urlencoded::parse(fragment.trim_start_matches('#').as_bytes()).into_owned().collect();
-    let get = |name: &str| params.iter().find(|(key, _)| key == name).map(|(_, value)| value.as_str());
-
-    let selector = get("selector").filter(|s| !s.is_empty()).ok_or("The sign-in reply has no selector")?;
-    if get("state").map(|state| &state[..state.len().min(100)]) != Some(expected_state) {
-        return Err(String::from("The sign-in reply does not match this sign-in"));
+impl std::fmt::Debug for DesktopFork {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DesktopFork").field("selector", &self.selector).finish_non_exhaustive()
     }
-    let raw_key = get("sk").ok_or("The sign-in reply has no key")?;
-    let key = URL_SAFE_NO_PAD
-        .decode(raw_key.trim_end_matches('='))
-        .ok()
-        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-        .ok_or("The sign-in reply has an invalid key")?;
-    // Payload versions 1 to 3 exist; anything else falls back to 1.
-    let payload_version = get("pv")
-        .and_then(|v| v.parse::<u8>().ok())
-        .filter(|version| (1..=3).contains(version))
-        .unwrap_or(1);
-    Ok(Callback { selector: selector.to_string(), key, payload_version })
+}
+
+/// Builds the `/desktop/login` address for a fork created by `GET auth/v4/sessions/forks`.
+pub fn desktop_request(selector: String, user_code: &str, sign_up: bool) -> Result<DesktopFork, String> {
+    if selector.is_empty() || user_code.is_empty() || user_code.contains(':') {
+        return Err(String::from("Proton returned an invalid sign-in code"));
+    }
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    Ok(desktop_request_with_key(selector, user_code, sign_up, key))
+}
+
+fn desktop_request_with_key(selector: String, user_code: &str, sign_up: bool, key: [u8; 32]) -> DesktopFork {
+    let key = Zeroizing::new(key);
+    // Proton's `signInWithAnotherDevicePush.ts` decodes `encodedBytes` with
+    // `Uint8Array.fromBase64` (standard alphabet).
+    let encoded_key = Zeroizing::new(STANDARD.encode(*key));
+    let raw_payload =
+        Zeroizing::new(format!("{DESKTOP_FORK_SCHEMA_VERSION}:{user_code}:{}:{CLIENT_ID}", encoded_key.as_str()));
+    // Proton's `handleDesktopFork.ts` reads `#payload=...` with `URLSearchParams`,
+    // which treats `+` as a space unless percent-encoded.
+    let fragment = Zeroizing::new(
+        url::form_urlencoded::Serializer::new(String::new()).append_pair("payload", raw_payload.as_str()).finish(),
+    );
+    let pv = DESKTOP_PAYLOAD_VERSION.to_string();
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.append_pair("app", APP_NAME).append_pair("pv", &pv);
+    if sign_up {
+        query.append_pair("t", "2").append_pair("plan", "free");
+    }
+    let url = Zeroizing::new(format!("{SSO_URL}/desktop/login?{}#{}", query.finish(), fragment.as_str()));
+    DesktopFork { selector, key: ForkKey(key), url }
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForkBlob {
     pub key_password: Zeroizing<String>,
+}
+
+/// Decrypts a desktop fork payload: tries the requested version (`pv=3`),
+/// falling back to Proton's default (`pv=1`) if the page ignored `pv`.
+pub fn decrypt_desktop_payload(key: &[u8; 32], payload: &str) -> Result<ForkBlob, String> {
+    decrypt_payload(key, payload, DESKTOP_PAYLOAD_VERSION).or_else(|_| decrypt_payload(key, payload, 1))
 }
 
 /// Decrypts the fork payload: base64 of IV, ciphertext and tag.
@@ -112,60 +132,91 @@ pub fn decrypt_payload(key: &[u8; 32], payload: &str, version: u8) -> Result<For
 }
 
 #[cfg(test)]
+pub(crate) fn encrypt_for_test(key: &[u8; 32], version: u8, json: &str) -> String {
+    let aad: &[u8] = if version >= 2 { b"fork" } else { b"" };
+    let payload = Payload { msg: json.as_bytes(), aad };
+    let (iv, ciphertext) = if version == 3 {
+        let iv = [7u8; 12];
+        (iv.to_vec(), Aes256Gcm::new(key.into()).encrypt(&Nonce::from(iv), payload).unwrap())
+    } else {
+        let iv = [7u8; 16];
+        (iv.to_vec(), Aes256Gcm16::new(key.into()).encrypt(&aes_gcm::Nonce::<U16>::from(iv), payload).unwrap())
+    };
+    STANDARD.encode([iv, ciphertext].concat())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-
-    fn encrypt(key: &[u8; 32], version: u8, json: &str) -> String {
-        let aad: &[u8] = if version >= 2 { b"fork" } else { b"" };
-        let payload = Payload { msg: json.as_bytes(), aad };
-        let (iv, ciphertext) = if version == 3 {
-            let iv = [7u8; 12];
-            (iv.to_vec(), Aes256Gcm::new(key.into()).encrypt(&Nonce::from(iv), payload).unwrap())
-        } else {
-            let iv = [7u8; 16];
-            (iv.to_vec(), Aes256Gcm16::new(key.into()).encrypt(&aes_gcm::Nonce::<U16>::from(iv), payload).unwrap())
-        };
-        STANDARD.encode([iv, ciphertext].concat())
-    }
 
     #[test]
     fn decrypts_every_payload_version() {
         let key = [42u8; 32];
-        let json = r#"{"type":"offline","keyPassword":"abc/123.xyz","offlineKeyPassword":"p","offlineKeySalt":"s"}"#;
+        let json = r#"{"type":"default","keyPassword":"abc/123.xyz"}"#;
         for version in 1..=3 {
-            let blob = decrypt_payload(&key, &encrypt(&key, version, json), version).unwrap();
+            let blob = decrypt_payload(&key, &encrypt_for_test(&key, version, json), version).unwrap();
             assert_eq!(blob.key_password.as_str(), "abc/123.xyz", "version {version}");
         }
         // The associated data differs between versions 1 and 2.
-        assert!(decrypt_payload(&key, &encrypt(&key, 2, json), 1).is_err());
-        assert!(decrypt_payload(&[1u8; 32], &encrypt(&key, 3, json), 3).is_err());
+        assert!(decrypt_payload(&key, &encrypt_for_test(&key, 2, json), 1).is_err());
+        assert!(decrypt_payload(&[1u8; 32], &encrypt_for_test(&key, 3, json), 3).is_err());
+        // Desktop decrypt accepts both pv=3 and Proton's QR default pv=1.
+        assert_eq!(decrypt_desktop_payload(&key, &encrypt_for_test(&key, 3, json)).unwrap().key_password.as_str(), "abc/123.xyz");
+        assert_eq!(decrypt_desktop_payload(&key, &encrypt_for_test(&key, 1, json)).unwrap().key_password.as_str(), "abc/123.xyz");
     }
 
     #[test]
-    fn builds_the_official_sign_in_address() {
-        let sign_in = request(false);
-        assert!(sign_in.url.starts_with(
-            "https://account.proton.me/authorize?app=proton-authenticator&state="
-        ));
-        assert!(sign_in.url.ends_with("&independent=0&prompt=login&promptBypass=sso&promptType=offline&pt=offline&t=3"));
-        assert_eq!(sign_in.state.len(), 43);
-        assert!(request(true).url.ends_with("&t=2&plan=free"));
+    fn builds_desktop_login_url_and_encodes_base64_safely() {
+        // Key bytes chosen so standard Base64 includes `+`, `/` and `=`.
+        let key = [0xfb, 0xff, 0xfe, 0xfb, 0xff, 0xfe, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                   11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26];
+        let encoded = STANDARD.encode(key);
+        assert!(encoded.contains('+') && encoded.contains('/') && encoded.contains('='));
+
+        let fork = desktop_request_with_key("sel-1".into(), "4PDQ78S3", false, key);
+        let parsed = url::Url::parse(fork.url.as_str()).unwrap();
+        assert_eq!(parsed.origin().ascii_serialization(), "https://account.proton.me");
+        assert_eq!(parsed.path(), "/desktop/login");
+        let query: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(query, vec![("app".into(), "proton-authenticator".into()), ("pv".into(), "3".into())]);
+
+        // Simulate Proton's `new URLSearchParams(window.location.hash.slice(1)).get('payload')`.
+        let fragment = parsed.fragment().unwrap();
+        assert!(!fragment.contains('+'), "literal '+' would become a space in URLSearchParams");
+        let payload = url::form_urlencoded::parse(fragment.as_bytes())
+            .find_map(|(k, v)| (k == "payload").then(|| v.into_owned()))
+            .unwrap();
+        let parts: Vec<&str> = payload.split(':').collect();
+        assert_eq!(parts, vec!["0", "4PDQ78S3", encoded.as_str(), "linux-authenticator"]);
+        assert_eq!(STANDARD.decode(parts[2]).unwrap(), key);
+
+        // Sign-up requests ForkType.SIGNUP (`t=2`) with the free plan.
+        let sign_up = desktop_request_with_key("sel-2".into(), "ABCD1234", true, key);
+        let parsed = url::Url::parse(sign_up.url.as_str()).unwrap();
+        let query: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(
+            query,
+            vec![
+                ("app".into(), "proton-authenticator".into()),
+                ("pv".into(), "3".into()),
+                ("t".into(), "2".into()),
+                ("plan".into(), "free".into()),
+            ]
+        );
     }
 
     #[test]
-    fn reads_the_callback_and_checks_its_state() {
-        let key = URL_SAFE_NO_PAD.encode([9u8; 32]);
-        let fragment = format!("selector=sel123&state=abc&sk={key}&pv=3&pt=offline&p=1");
-        let callback = parse_callback(&fragment, "abc").unwrap();
-        assert_eq!(callback, Callback { selector: String::from("sel123"), key: [9u8; 32], payload_version: 3 });
-        assert!(parse_callback(&fragment, "other").is_err());
-        assert!(parse_callback("state=abc", "abc").is_err());
-        let no_version = format!("selector=s&state=abc&sk={key}");
-        assert_eq!(parse_callback(&no_version, "abc").unwrap().payload_version, 1);
-        for unknown in ["0", "4", "x"] {
-            let fragment = format!("selector=s&state=abc&sk={key}&pv={unknown}");
-            assert_eq!(parse_callback(&fragment, "abc").unwrap().payload_version, 1, "pv={unknown}");
-        }
+    fn rejects_invalid_fork_reply_and_redacts_debug() {
+        assert!(desktop_request(String::new(), "ABCD1234", false).is_err());
+        assert!(desktop_request("sel".into(), "", false).is_err());
+        assert!(desktop_request("sel".into(), "BAD:CODE", false).is_err());
+
+        let fork = desktop_request_with_key("sel-debug".into(), "4PDQ78S3", false, [9u8; 32]);
+        let shown = format!("{fork:?}");
+        assert!(shown.contains("sel-debug"));
+        assert!(!shown.contains("4PDQ78S3"));
+        assert!(!shown.contains(&STANDARD.encode([9u8; 32])));
+        assert_eq!(format!("{:?}", fork.key), "ForkKey(…)");
     }
 
     /// Payloads encrypted by an earlier build (aes-gcm 0.10): crate upgrades

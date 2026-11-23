@@ -4,7 +4,7 @@
 #   flatpak/build.sh
 #   flatpak install --user flatpak/dev.nilltadios.CosmicAuthenticator.flatpak
 #
-# Needs flatpak-builder (or the org.flatpak.Builder app) and org.gnome.Sdk 51.
+# Needs flatpak-builder (or the org.flatpak.Builder app) and org.freedesktop.Sdk 26.08.
 # The manifest downloads the official Rust release pinned in rust-toolchain.toml.
 # Crates are vendored into flatpak/vendor first, pinned by Cargo.lock, because
 # the build sandbox has no network (flatpak-builder fetches the Rust archive).
@@ -35,5 +35,6 @@ systemd-run --user --scope --quiet -p MemoryMax="$memory" -p MemorySwapMax=2G \
     nice -n 10 "${builder[@]}" --jobs="$jobs" --force-clean --disable-rofiles-fuse \
     --state-dir="$flatpak_dir/.flatpak-builder" --repo="$flatpak_dir/repo" \
     "$flatpak_dir/build-dir" "$flatpak_dir/$app_id.yml"
+"$project_dir/demo/check-icons.sh" --flatpak
 flatpak build-bundle "$flatpak_dir/repo" "$flatpak_dir/$app_id.flatpak" "$app_id"
 echo "Bundle: $flatpak_dir/$app_id.flatpak"

@@ -1,0 +1,5 @@
+Cosmic Icons by System76
+https://github.com/pop-os/cosmic-icons.git
+Commit: f1a282a0822aed1f0083dd2ab2e6c65bd5b401eb
+Icon assets: CC-BY-SA-4.0 (see LICENSE).
+Minimal scalable symbolic subset used by cosmic-authenticator and libcosmic.

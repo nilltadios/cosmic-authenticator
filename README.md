@@ -65,7 +65,7 @@ flatpak uninstall --user dev.nilltadios.CosmicAuthenticator   # to remove it
 ```
 
 `build.sh` vendors the crates (pinned by `Cargo.lock`), then builds offline
-with `flatpak-builder` on the GNOME 51 runtime (for the sign-in window's WebKit),
+with `flatpak-builder` on the Freedesktop 26.08 runtime,
 with the official Rust release pinned in `rust-toolchain.toml`, and exports a single-file bundle. The app runs as
 a native Wayland client, with X11 only as a fallback where there is no Wayland.
 Its sandbox allows network (logos), the Secret Service keyring (the vault key),
@@ -131,10 +131,10 @@ colour at 5, as in Proton's apps.
 
 ## Proton sync
 
-*Settings → Sync between devices* signs in to a Proton account the way the
-official app does: a small window on Proton's account site, where Proton
-handles the password, 2FA and CAPTCHA. The app then downloads and decrypts the
-account's codes. *Create one* opens Proton's sign-up page instead.
+*Settings → Sync between devices* signs in to a Proton account in your default
+browser using Proton's desktop sign-in page, where Proton handles the password,
+2FA, passkeys and CAPTCHA. The app then downloads and decrypts the account's
+codes. *Create one* opens Proton's sign-up page instead.
 
 This version syncs one way. Codes from Proton appear here and follow changes
 made on other devices, but they cannot be edited or deleted here, and codes
@@ -146,9 +146,9 @@ added here stay on this device. Two-way sync comes next.
   which Proton entry (ids and revisions only).
 - Turning sync off ends the session on Proton; the codes stay on this device.
 - To Proton's servers the app presents itself as the official Linux client.
-- The sign-in window is a separate program, `cosmic-authenticator-login`
-  (in `login/`), so the app itself never loads a web engine. It needs
-  WebKitGTK 6.0; the Flatpak includes it.
+- Sign-in opens Proton's desktop sign-in flow in your default browser (via
+  `xdg-open` / the OpenURI portal), so the app never links or loads WebKitGTK,
+  GTK or Electron.
 
 How the official app signs in and syncs, with sources, is in
 [docs/proton-sync.md](docs/proton-sync.md).

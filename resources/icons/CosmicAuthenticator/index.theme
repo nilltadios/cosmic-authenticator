@@ -1,0 +1,40 @@
+[Icon Theme]
+Name=COSMIC Authenticator
+Comment=Bundled COSMIC symbolic icons for COSMIC Authenticator
+Inherits=breeze,Adwaita,hicolor
+Directories=scalable/actions,scalable/categories,scalable/mimetypes,scalable/places,scalable/status
+
+[scalable/actions]
+Size=16
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Actions
+
+[scalable/categories]
+Size=16
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Categories
+
+[scalable/mimetypes]
+Size=16
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Mimetypes
+
+[scalable/places]
+Size=16
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Places
+
+[scalable/status]
+Size=16
+MinSize=8
+MaxSize=512
+Type=Scalable
+Context=Status

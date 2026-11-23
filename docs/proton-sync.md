@@ -14,38 +14,29 @@ unless they say otherwise. Recheck them when Proton releases a new version.
 | App name (fork `app`) | `proton-authenticator` | `packages/shared/lib/constants.ts` (`APPS.PROTONAUTHENTICATOR`) |
 | Client ID | `linux-authenticator` | same file (`linuxClientID`) |
 | Version header | `x-pm-appversion: linux-authenticator@1.1.6` | `packages/shared/lib/fetch/headers.ts` (`clientID@version`); the version is in `src-tauri/Cargo.toml` |
-| Sign-in window user agent | `Mozilla/5.0 (X11; Linux x86_64) ProtonAuthenticator/1.1.6 Electron/1.0.0` | `src-tauri/src/auth.rs` (`get_user_agent`) |
+| User agent | `Mozilla/5.0 (X11; Linux x86_64) ProtonAuthenticator/1.1.6` | native client UA (the official Tauri app appends `Electron/1.0.0` only for its embedded webview; our `/desktop/login` flow passes `linux-authenticator` explicitly in `#payload`) |
 | Client type | 10 | `applications/authenticator/appConfig.ts` |
 
 The owner decided on 2026-09-25 that this app presents itself with these values.
 
-## Sign-in (session fork)
+## Sign-in (desktop browser session fork)
 
-1. **Request.** `packages/pass/lib/auth/fork.ts` (`requestFork`) builds
-   `https://account.proton.me/authorize?` with, in order: `app=proton-authenticator`,
-   `state=<32 random bytes, base64url, no padding>`, `independent=0`, `prompt=login`,
-   `promptBypass=sso`, `promptType=offline`, `pt=offline`, `t=3` (log in) or `t=2`
-   (sign up, plus `plan=free`). The fork type values come from
-   `packages/shared/lib/authentication/fork/constants.ts`.
-2. **Window.** `src-tauri/src/auth.rs` opens a 400x600 web view at that address.
-   On every navigation, if the path contains `/login`, it blocks the navigation
-   and sends the URL fragment to the app. Proton's page handles the password,
-   2FA and CAPTCHA, so the app never sees the password.
-3. **Callback fragment** (`packages/shared/lib/authentication/fork/getConsumeForkParameters.ts`):
-   `selector`, `state` (check that it matches the request), `sk` (32-byte key,
-   base64url), `pv` (payload version 1 to 3; missing or invalid means 1),
-   `pt`, `p` (persistent), `tr` (trusted), `t`.
-4. **Pull.** `GET auth/v4/sessions/forks/{selector}`, with no session headers,
-   returns `UID`, `AccessToken`, `RefreshToken`, `LocalID`, `Payload` and more.
-5. **Payload** (`fork/blob.ts`, `authentication/sessionBlobCryptoHelper.ts`,
+The official Tauri app opens `/authorize` in an embedded WebKitGTK window (`src-tauri/src/auth.rs`) and intercepts navigation to `/login`. To avoid shipping WebKitGTK or a GNOME Flatpak runtime, this app uses Proton Account's desktop browser fork (`applications/account/src/app/content/fork/handleDesktopFork.ts` and `packages/account/signInWithAnotherDevice/`):
+
+1. **Create fork.** `GET auth/v4/sessions/forks` (anonymous, with `x-pm-appversion`) returns `{Selector, UserCode}`.
+2. **Open system browser.** The app generates a one-time 32-byte AES-256-GCM key and opens the user's default browser (`xdg-open`, routed through `org.freedesktop.portal.OpenURI` inside Flatpak) to:
+   `https://account.proton.me/desktop/login?app=proton-authenticator&pv=3#payload=<urlencoded(0:<UserCode>:<standard_base64(key)>:linux-authenticator)>`
+   (adding `&t=2&plan=free` for sign-up). Proton's page handles the password, 2FA, passkeys and CAPTCHA, encrypts `{type: "default", keyPassword}` with the one-time key from `#payload`, and calls `POST auth/v4/sessions/forks` with `UserCode`, `ChildClientID: "linux-authenticator"`, and `Independent: 1`.
+3. **Poll and pull.** The app polls `GET auth/v4/sessions/forks/{Selector}` every 3 seconds (up to 9 minutes). While the user is still signing in, Proton returns HTTP 422 (`Code: 2001`); once complete, it returns `UID`, `AccessToken`, `RefreshToken`, `Payload` and more.
+4. **Payload** (`fork/blob.ts`, `authentication/sessionBlobCryptoHelper.ts`,
    `node_modules/@protontech/crypto/src/subtle/aesGcm.ts`): base64 (standard
-   alphabet) of IV || ciphertext || tag, AES-256-GCM with the `sk` key.
+   alphabet) of IV || ciphertext || tag, AES-256-GCM with the one-time key.
    - v1: 16-byte IV, no associated data, plaintext as a binary string
    - v2: 16-byte IV, associated data `fork`
    - v3: 12-byte IV, associated data `fork`, UTF-8
    The plaintext is JSON: `{type: "default" | "offline", keyPassword,
    offlineKeyPassword?, offlineKeySalt?}`.
-6. **User and keys.** `GET core/v4/users` with session headers. `User.Keys[]`
+5. **User and keys.** `GET core/v4/users` with session headers. `User.Keys[]`
    holds armored OpenPGP private keys (`ID`, `PrivateKey`, `Primary`, `Active`),
    unlocked with `keyPassword`. The official code expects the primary key first.
 

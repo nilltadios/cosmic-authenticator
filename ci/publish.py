@@ -22,7 +22,7 @@ import urllib.parse
 APP = "dev.nilltadios.CosmicAuthenticator"
 REMOTE = "cosmic-authenticator"
 TITLE = "COSMIC Authenticator"
-RUNTIME = "GNOME 51"
+RUNTIME = "Freedesktop 26.08"
 
 root = pathlib.Path(__file__).resolve().parents[1]
 repo, site, base, key, commit = sys.argv[1:]

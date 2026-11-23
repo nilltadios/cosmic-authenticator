@@ -21,9 +21,10 @@ fn api_url() -> String {
 pub const SSO_URL: &str = "https://account.proton.me";
 pub const APP_NAME: &str = "proton-authenticator";
 /// The official Linux app's client ID and version.
+pub const CLIENT_ID: &str = "linux-authenticator";
 pub const APP_VERSION: &str = "linux-authenticator@1.1.6";
-/// The official sign-in window's user agent (`src-tauri/src/auth.rs`).
-pub const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) ProtonAuthenticator/1.1.6 Electron/1.0.0";
+/// Native user agent identifying the official Linux app version without Electron.
+pub const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) ProtonAuthenticator/1.1.6";
 
 /// Proton's reply when it no longer accepts `APP_VERSION` (`APP_VERSION_BAD`
 /// in `packages/shared/lib/errors.ts`).
@@ -81,6 +82,8 @@ pub enum Method {
 
 pub struct Client {
     agent: ureq::Agent,
+    #[cfg(test)]
+    base_url: Option<String>,
     pub tokens: Option<Tokens>,
     /// Set when a refresh replaced the tokens, so the caller can store them.
     pub tokens_changed: bool,
@@ -94,11 +97,32 @@ impl Client {
             .user_agent(USER_AGENT)
             .build()
             .into();
-        Client { agent, tokens, tokens_changed: false }
+        Client {
+            agent,
+            #[cfg(test)]
+            base_url: None,
+            tokens,
+            tokens_changed: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_base_url(base_url: String, tokens: Option<Tokens>) -> Self {
+        let mut client = Self::new(tokens);
+        client.base_url = Some(base_url);
+        client
+    }
+
+    fn base_url(&self) -> String {
+        #[cfg(test)]
+        if let Some(url) = &self.base_url {
+            return url.clone();
+        }
+        api_url()
     }
 
     fn send(&self, method: Method, path: &str, body: Option<&Value>, auth: bool) -> Result<(u16, Value), ApiError> {
-        let url = format!("{}/{path}", api_url());
+        let url = format!("{}/{path}", self.base_url());
         let mut headers = vec![
             ("x-pm-appversion", APP_VERSION.to_string()),
             ("Accept", String::from("application/vnd.protonmail.v1+json")),
@@ -171,9 +195,15 @@ impl Client {
         Self::check(status, value)
     }
 
-    /// Sends a request without session headers, as the fork pull needs.
+    /// Sends a request without session headers, as the fork requests need.
     pub fn request_anonymous(&self, method: Method, path: &str) -> Result<Value, ApiError> {
-        let client = Client { agent: self.agent.clone(), tokens: None, tokens_changed: false };
+        let client = Client {
+            agent: self.agent.clone(),
+            #[cfg(test)]
+            base_url: self.base_url.clone(),
+            tokens: None,
+            tokens_changed: false,
+        };
         let (status, value) = client.send(method, path, None, false)?;
         Self::check(status, value)
     }

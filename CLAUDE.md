@@ -85,11 +85,9 @@ the laptop screen alone**, where the discrete GPU may otherwise sleep and the
 app could wake it; check `/sys/bus/pci/devices/0000:03:00.0/power/runtime_status`
 and `/proc/<pid>/fdinfo` (`drm-pdev`, `drm-engine-gfx`) with no monitor attached.
 
-Built on 2026-09-25, **not yet tried with a real account** (only the user can
-sign in). Checked the same day: the installed Flatpak's sign-in window opens
-and Proton's page loads as "Sign in — To continue to Proton Authenticator".
-Built: sign-in and account creation through `login/` (the WebKit helper,
-`cosmic-authenticator-login`), and sync (`src/proton/`). The session (tokens and
+Built: sign-in and account creation via Proton's `/desktop/login` browser fork
+(opened in the system browser via `xdg-open` / OpenURI portal; no WebKitGTK,
+GTK or Electron helper), and sync (`src/proton/`). The session (tokens and
 key password) is in the keyring as `proton-session`; links between local and
 Proton entries are in `$XDG_DATA_HOME/cosmic-authenticator/sync.json`.
 
@@ -133,8 +131,7 @@ before following a machine-specific note.
 **Fedora 44 with KDE Plasma on Wayland:**
 - `~` is `/home/nilllinux22`; this folder is at `.../@home/realcachy`, with that
   install's cargo home at `.../@home/realcachy/.cargo` and Fedora's at `~/.cargo`.
-- The COSMIC icon theme is not installed; `main.rs` falls back to the desktop's
-  icon theme (Breeze).
+- The COSMIC icon theme is not installed on the host, and `org.freedesktop.Platform//26.08` ships only `hicolor`; all app UI icons (`src/ui_icons.rs`) and `libcosmic` widget icons (`src/window_icons.rs`) are compiled into the binary from `resources/icons/CosmicAuthenticator/` and checked by `demo/check-icons.sh`.
 - `gio trash` fails on this mount ("system internal mounts"); say so before
   falling back to `rm`.
 - Test windows go on the external monitor, DP-2 (see Building and testing).
@@ -167,16 +164,11 @@ Both:
   (`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=2G nice -n 10 …`,
   `CARGO_BUILD_JOBS=6`).
 
-- `cargo build --release`, `cargo test --release` (41 tests; 3 ignored ones run by `demo/sync-test.sh`, 1 by `demo/qr-sweep.sh`, which checks the QR reader on 48 small screenshot-like codes), `cargo clippy --release`.
-  The sign-in helper (`login/`, `cargo build -p cosmic-authenticator-login`)
-  needs WebKitGTK 6.0 development files, which this host lacks
-  (`webkitgtk6.0-devel`); it builds in the Flatpak (GNOME 51 SDK). A native
-  build without it shows an error when signing in. To check the helper alone
-  (about a minute, instead of a full Flatpak build):
-  `systemd-run --user --scope -p MemoryMax=4G flatpak run --filesystem="$PWD" --filesystem=home/.cargo --filesystem=home/.rustup:ro --command=sh org.gnome.Sdk//51 -c 'export PATH=$HOME/.rustup/toolchains/1.100.0-x86_64-unknown-linux-gnu/bin:$PATH; cargo --offline test --release -j 4 -p cosmic-authenticator-login --target-dir target/sdk'`
-  (rustup's 1.100.0, the same official release the Flatpak downloads; `rustup toolchain install 1.100.0` if missing).
-  `login/Cargo.toml` turns on gtk4's `v4_10` because webkit6 0.6.1 needs it
-  but does not ask for it.
+- `cargo build --release`, `cargo test --release` (3 ignored tests run by `demo/sync-test.sh`, 1 by `demo/qr-sweep.sh`, which checks the QR reader on 48 small screenshot-like codes), `cargo clippy --release`.
+  The app is a single crate with no WebKitGTK or GTK dependency; sign-in opens
+  the system browser via `xdg-open` (OpenURI portal in Flatpak) and polls
+  Proton's desktop fork endpoint. The Flatpak uses `org.freedesktop.Platform//26.08`
+  and `org.freedesktop.Sdk//26.08`.
 - Sync end to end: `demo/sync-test.sh [screenshot dir]` starts
   `demo/mock-proton.py` (a fake Proton API on 127.0.0.1 with the fixture account
   key) and points the app at it with `AUTHENTICATOR_API_URL`, which only accepts
@@ -220,7 +212,7 @@ Both:
 ## Releasing
 
 - `flatpak/release.sh X.Y.Z` releases to the installed Flatpak: raises the
-  version (both Cargo.toml files, Cargo.lock, metainfo), runs the tests,
+  version (Cargo.toml, Cargo.lock, metainfo), runs the tests,
   builds, commits "Release X.Y.Z", then `flatpak update`s the app from the local
   `cosmicauthenticator` remote (`file://…/flatpak/repo`, added 2026-09-27 on
   CachyOS). It needs a clean tree, because the Flatpak builds the working tree.

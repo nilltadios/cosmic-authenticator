@@ -1,11 +1,12 @@
 # Flatpak manifest. Build with flatpak/build.sh, which vendors the crates first:
 # the build sandbox has no network, so every crate comes from flatpak/vendor.
 id: dev.nilltadios.CosmicAuthenticator
-# GNOME's runtime, for WebKitGTK: the sign-in window is a web view, as in the
-# official app. The main app does not load WebKit; only the sign-in helper does.
-runtime: org.gnome.Platform
-runtime-version: '51'
-sdk: org.gnome.Sdk
+# Freedesktop runtime: the app is pure Rust + libcosmic, and Proton sign-in
+# opens the user's system browser through the OpenURI portal (no WebKitGTK or
+# GNOME runtime needed).
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
 command: cosmic-authenticator
 
 finish-args:
@@ -27,7 +28,7 @@ cleanup:
 
 modules:
   # The official Rust release pinned in rust-toolchain.toml, not the SDK's
-  # rust-stable extension, whose 26.08 branch (GNOME 51's base) is still 1.98.0.
+  # rust-stable extension, whose 26.08 branch is still 1.98.0.
   # To update: change the version here and in rust-toolchain.toml, and take the
   # sha256 from the .sha256 file next to the archive on static.rust-lang.org.
   - name: rust-toolchain
@@ -52,11 +53,11 @@ modules:
       - rustc --version && cargo --version
       - mkdir -p .cargo && cp flatpak/cargo-config.toml .cargo/config.toml
       # Cargo does not follow flatpak-builder's --jobs by itself; pass it on.
-      - cargo --offline build --release --locked -j "${FLATPAK_BUILDER_N_JOBS:-4}" -p cosmic-authenticator -p cosmic-authenticator-login
+      - cargo --offline build --release --locked -j "${FLATPAK_BUILDER_N_JOBS:-4}"
       - install -Dm755 target/release/cosmic-authenticator /app/bin/cosmic-authenticator
-      - install -Dm755 target/release/cosmic-authenticator-login /app/bin/cosmic-authenticator-login
       - install -Dm644 resources/dev.nilltadios.CosmicAuthenticator.desktop /app/share/applications/dev.nilltadios.CosmicAuthenticator.desktop
       - install -Dm644 resources/dev.nilltadios.CosmicAuthenticator.svg /app/share/icons/hicolor/scalable/apps/dev.nilltadios.CosmicAuthenticator.svg
+      - cp -r resources/icons/CosmicAuthenticator /app/share/icons/
       - install -Dm644 resources/dev.nilltadios.CosmicAuthenticator.metainfo.xml /app/share/metainfo/dev.nilltadios.CosmicAuthenticator.metainfo.xml
     sources:
       - type: dir
